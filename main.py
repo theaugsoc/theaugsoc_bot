@@ -534,6 +534,11 @@ async def enforce_critique_format(update: Update, context: ContextTypes.DEFAULT_
     if not msg or msg.message_thread_id != CRITIQUE_TOPIC_ID:
         return
 
+    # ALLOW REPLIES TO THE BOT'S TAG SELECTION MESSAGE
+    parent_msg = msg.reply_to_message
+    if parent_msg and "Tags Selected:" in (parent_msg.text or ""):
+        return  # Let process_chat handle this submission!
+
     # Check for mandatory hashtags
     text = msg.text or ""
     has_genre = any(tag in text.lower() for tag in ['#fiction', '#poetry', '#nonfiction', '#prose'])
@@ -541,10 +546,10 @@ async def enforce_critique_format(update: Update, context: ContextTypes.DEFAULT_
 
     if not (has_genre and has_type):
         try:
-            # Delete the non-compliant plain text message
+            # Delete non-compliant plain text
             await msg.delete()
             
-            # Warn the user temporarily
+            # Warn user temporarily
             warning = await context.bot.send_message(
                 chat_id=msg.chat_id,
                 message_thread_id=CRITIQUE_TOPIC_ID,
@@ -566,17 +571,16 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sync_user(user.id, user.username)
 
     # CHECK FOR SUBMISSION REPLIES FIRST
+    # Inside process_chat:
     parent_msg = msg.reply_to_message
     if parent_msg and "Tags Selected:" in (parent_msg.text or ""):
         genre = context.user_data.get('submission_genre', 'general')
         post_type = context.user_data.get('submission_type', 'feedback')
         
-        # Split title (first line) and body content (rest)
         lines = msg.text.strip().splitlines()
         title = lines[0]
         content = "\n".join(lines[1:]) if len(lines) > 1 else title
         
-        # Create submission record
         sub_id = create_submission(
             user.id, 
             f"@{user.username}" if user.username else user.first_name, 
@@ -603,7 +607,6 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         ])
 
-        # Post submission card directly to Critique Corner (Topic 8)
         await context.bot.send_message(
             chat_id=msg.chat_id,
             message_thread_id=CRITIQUE_TOPIC_ID,
@@ -612,7 +615,6 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
 
-        # Cleanup original user text & tag message to keep channel clean
         try:
             await msg.delete()
             await parent_msg.delete()
