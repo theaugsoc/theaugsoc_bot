@@ -437,7 +437,7 @@ async def cmd_submitwork(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
-        return
+    return
 
     title = lines[0]
     tag_line = lines[1]
