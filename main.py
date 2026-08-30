@@ -561,41 +561,66 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     if not msg or not msg.text:
         return
-    text_to_check = msg.text.strip()
-    if text_to_check.startswith("/submitwork"):
+
+    user = update.effective_user
+    sync_user(user.id, user.username)
+
+    # CHECK FOR SUBMISSION REPLIES FIRST
+    parent_msg = msg.reply_to_message
+    if parent_msg and "Tags Selected:" in (parent_msg.text or ""):
+        genre = context.user_data.get('submission_genre', 'general')
+        post_type = context.user_data.get('submission_type', 'feedback')
+        
+        # Split title (first line) and body content (rest)
+        lines = msg.text.strip().splitlines()
+        title = lines[0]
+        content = "\n".join(lines[1:]) if len(lines) > 1 else title
+        
+        # Create submission record
+        sub_id = create_submission(
+            user.id, 
+            f"@{user.username}" if user.username else user.first_name, 
+            title, 
+            f"#{genre}", 
+            f"#{post_type}", 
+            content
+        )
+        
+        preview = content[:300] + ("..." if len(content) > 300 else "")
+        card_text = (
+            f"📖 **SUBMISSION #{sub_id}: {title.upper()}**\n"
+            f"✍️ Author: @{user.username if user.username else user.first_name} | Tags: #{genre} #{post_type}\n"
+            f"--------------------------------------------------\n"
+            f"{preview}\n"
+            f"--------------------------------------------------\n"
+            f"📊 Critiques Received: 0"
+        )
+
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("💬 Leave Critique", callback_data=f"sub_rev_{sub_id}"),
+                InlineKeyboardButton("🔍 View Stack (0)", callback_data=f"sub_stack_{sub_id}")
+            ]
+        ])
+
+        # Post submission card directly to Critique Corner (Topic 8)
+        await context.bot.send_message(
+            chat_id=msg.chat_id,
+            message_thread_id=CRITIQUE_TOPIC_ID,
+            text=card_text,
+            reply_markup=keyboard,
+            parse_mode="Markdown"
+        )
+
+        # Cleanup original user text & tag message to keep channel clean
+        try:
+            await msg.delete()
+            await parent_msg.delete()
+        except Exception:
+            pass
         return
 
-    # Enforce mandatory hashtags for raw chat messages posted directly in Critique Corner
-    thread_id = getattr(msg, 'message_thread_id', None)
-    if thread_id == CRITIQUE_TOPIC_ID and not user.is_bot:
-        text_to_check = msg.text or msg.caption or ""
-        
-        # Pass through if it's the submitwork command
-        if text_to_check.startswith("/submitwork"):
-            return
-
-        is_valid, _, _ = parse_and_validate_hashtags(text_to_check)
-        if not is_valid:
-            try:
-                await msg.delete()
-                print(f"[DEBUG] Deleted non-compliant message from user {user.id}")
-            except Exception as e:
-                print(f"[DEBUG] Failed to delete message: {e}. Check if user is Admin or if Bot lacks Delete permission.")
-
-            try:
-                await context.bot.send_message(
-                    chat_id=user.id,
-                    text=(
-                        "⚠️ **Message Removed from #critique-corner**\n\n"
-                        "All submissions must include at least one **Genre** hashtag (`#poetry`, `#fiction`, `#nonfiction`) "
-                        "and one **Post Type** hashtag (`#critique`, `#submission`).\n\n"
-                        "Please use `/submitwork` to create a structured submission card!"
-                    ),
-                    parse_mode="Markdown"
-                )
-            except Exception:
-                pass
-            return
+    # Rest of your existing process_chat code continues below...
             
     # Admin .txt File Upload Handler in DM
     if update.effective_chat.type == 'private' and msg.document and await is_admin(msg.chat_id, user.id, context):
@@ -761,6 +786,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("subtag_type_"):
         selected_type = data.replace("subtag_type_", "")
+        context.user_data['submission_type'] = selected_type  # Save selected post type
         genre = context.user_data.get('submission_genre', 'general')
         
         await query.edit_message_text(
