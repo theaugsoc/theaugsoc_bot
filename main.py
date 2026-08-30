@@ -20,6 +20,12 @@ PROMPTS_TOPIC_ID = 9  # Update this to your exact "Prompts and Challenges" Topic
 
 USER_TICKET_STATE = {}  # { user_id: {"category": str, "draft_text": str} }
 
+
+def run_flask():
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.ERROR)  # Suppresses standard HTTP request logs
+    port = int(os.environ.get("PORT", 8080))
+    app_flask.run(host='0.0.0.0', port=port)
 # --- Flask Keep-Alive Server ---
 app_flask = Flask('')
 
@@ -38,75 +44,56 @@ def keep_alive():
 
 # --- Database Functions ---
 def init_db():
-    conn = sqlite3.connect('critiques.db')
+    conn = sqlite3.connect('critiques.db', timeout=10, check_same_thread=False)
     cursor = conn.cursor()
+    
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS user_critiques (
+        CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
             username TEXT,
-            critique_count INTEGER DEFAULT 0
+            credits INTEGER DEFAULT 3
         )
     ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS review_logs (
-            user_id INTEGER,
-            target_msg_id INTEGER,
-            PRIMARY KEY (user_id, target_msg_id)
-        )
-    ''')
-
-# ADD HERE:
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS tickets (
             ticket_id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
+            username TEXT,
             category TEXT,
-            details TEXT,
-            status TEXT DEFAULT 'OPEN'
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-# --- PROMPT AUTOMATION TABLE SETUP ---
-    conn = sqlite3.connect('critiques.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS prompts (
-            prompt_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            category TEXT,
-            challenge_type TEXT DEFAULT 'weekly',
-            prompt_text TEXT UNIQUE,
-            priority INTEGER DEFAULT 0,
-            is_used INTEGER DEFAULT 0
-        )
-    ''')
-
-    # Submission Cards & Threaded Feedback Tables
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS submissions (
-            sub_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            author_tag TEXT,
-            title TEXT,
-            genre_tag TEXT,
-            post_tag TEXT,
-            content TEXT,
-            msg_id INTEGER,
+            message TEXT,
+            status TEXT DEFAULT 'OPEN',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS prompts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            category TEXT,
+            challenge_type TEXT,
+            prompt_text TEXT,
+            is_used INTEGER DEFAULT 0
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS submissions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            title TEXT,
+            link TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS submission_reviews (
-            review_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            sub_id INTEGER,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            submission_id INTEGER,
             reviewer_id INTEGER,
-            reviewer_tag TEXT,
             review_text TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    conn.commit()
+    conn.close()
     
     # Pre-load initial prompts if queue is empty
     cursor.execute('SELECT COUNT(*) FROM prompts')
@@ -505,7 +492,8 @@ async def cmd_addprompts(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("❌ Admin command only.")
         return
 
-    raw_text = msg.text.replace("/addprompts", "").strip()
+    parts = msg.text.split(maxsplit=1)
+raw_text = parts[1].strip() if len(parts) > 1 else ""
     if not raw_text:
         await msg.reply_text(
             "Usage:\n`/addprompts\ncategory | challenge_type | prompt text`\n\n"
@@ -541,8 +529,10 @@ async def cmd_manageprompts(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- Moderation & Appeal Logic ---
 async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
-    user = update.effective_user
-    if not msg or not user or user.is_bot:
+    if not msg or not msg.text:
+        return
+    text_to_check = msg.text.strip()
+    if text_to_check.startswith("/submitwork"):
         return
 
     # Enforce mandatory hashtags for raw chat messages posted directly in Critique Corner
@@ -717,6 +707,10 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- Callback Button Handlers ---
 async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    user = update.effective_user
 
     # Submission Cards & Threaded Reviews
     if data.startswith("sub_rev_"):
@@ -744,12 +738,12 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.message.reply_text(stack_text, parse_mode="Markdown")
         return
-        
+
     # Interactive Queue Manager Callbacks
     if data.startswith("q_view_"):
         cat = data.replace("q_view_", "")
         prompts = get_prompts_by_category(cat)
-        
+
         if not prompts:
             await query.edit_message_text(f"📭 No queued prompts found for **{cat.capitalize()}**.", parse_mode="Markdown")
             return
@@ -763,7 +757,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton(f"🚀 Make #{p_id} Next", callback_data=f"q_next_{p_id}_{cat}"),
                 InlineKeyboardButton(f"🗑️ Delete #{p_id}", callback_data=f"q_del_{p_id}_{cat}")
             ])
-        
+
         buttons.append([InlineKeyboardButton("🔙 Back to Categories", callback_data="q_back")])
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
         return
@@ -785,10 +779,6 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "q_back":
         await cmd_manageprompts(update, context)
         return
-        
-    await query.answer()
-    data = query.data
-    user = update.effective_user
 
     if data.startswith("hub_cat_"):
         cat_map = {
@@ -803,38 +793,44 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("tck_grant_"):
         parts = data.split("_")
-        t_id, target_id = int(parts[2]), int(parts[3])
-        add_critique(target_id, 2)
-        update_ticket_status(t_id, "RESOLVED_GRANTED")
-        await query.edit_message_text(f"{query.message.text}\n\n✅ **RESOLVED:** Granted 2 credits to user `{target_id}`.", parse_mode="Markdown")
-        try:
-            await context.bot.send_message(chat_id=target_id, text=f"🎉 Ticket #{t_id} resolved! 2 critique credits added to your balance.")
-        except Exception:
-            pass
+        if len(parts) >= 4:
+            t_id, target_id = int(parts[2]), int(parts[3])
+            add_critique(target_id, 2)
+            update_ticket_status(t_id, "RESOLVED_GRANTED")
+            await query.edit_message_text(f"{query.message.text}\n\n✅ **RESOLVED:** Granted 2 credits to user `{target_id}`.", parse_mode="Markdown")
+            try:
+                await context.bot.send_message(chat_id=target_id, text=f"🎉 Ticket #{t_id} resolved! 2 critique credits added to your balance.")
+            except Exception:
+                pass
 
     elif data.startswith("tck_dismiss_"):
         parts = data.split("_")
-        t_id, target_id = int(parts[2]), int(parts[3])
-        update_ticket_status(t_id, "DISMISSED")
-        await query.edit_message_text(f"{query.message.text}\n\n❌ **DISMISSED:** Ticket closed.", parse_mode="Markdown")
-        try:
-            await context.bot.send_message(chat_id=target_id, text=f"ℹ️ Ticket #{t_id} reviewed and closed by community admins.")
-        except Exception:
-            pass
+        if len(parts) >= 4:
+            t_id, target_id = int(parts[2]), int(parts[3])
+            update_ticket_status(t_id, "DISMISSED")
+            await query.edit_message_text(f"{query.message.text}\n\n❌ **DISMISSED:** Ticket closed.", parse_mode="Markdown")
+            try:
+                await context.bot.send_message(chat_id=target_id, text=f"ℹ️ Ticket #{t_id} reviewed and closed by community admins.")
+            except Exception:
+                pass
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     sync_user(user.id, user.username)
     
-    if context.args and context.args[0] == "appeal":
-        draft = USER_TICKET_STATE.get(user.id, {}).get("draft_text", "[No draft captured]")
-        USER_TICKET_STATE[user.id] = {"category": "Post Appeal", "draft_text": draft}
-        await update.message.reply_text("📩 **Post Appeal**: Please reply to this message with an explanation for your appeal.")
-    elif context.args and context.args[0] == "support":
-        await cmd_support(update, context)
-    else:
-        await update.message.reply_text("Hello! I am The Aug Soc community manager bot. Type /mycredits to check balance or /support for help.")
+    if context.args:
+        arg = context.args[0].lower()
+        if arg == "appeal":
+            draft = USER_TICKET_STATE.get(user.id, {}).get("draft_text", "[No draft captured]")
+            USER_TICKET_STATE[user.id] = {"category": "Post Appeal", "draft_text": draft}
+            await update.message.reply_text("📩 **Post Appeal**: Please reply to this message with an explanation for your appeal.")
+            return
+        elif arg == "support":
+            await cmd_support(update, context)
+            return
 
+    await update.message.reply_text("Hello! I am The Aug Soc community manager bot. Type /mycredits to check balance or /support for help.")
+    
 async def send_scheduled_prompt(context: ContextTypes.DEFAULT_TYPE):
     prompt_data = get_next_prompt_to_dispatch()
     if not prompt_data:
@@ -862,11 +858,26 @@ async def send_scheduled_prompt(context: ContextTypes.DEFAULT_TYPE):
     )
     mark_prompt_used(prompt_id)
     
+async def post_init(application: Application):
+    commands = [
+        BotCommand("start", "Start the bot and view main menu"),
+        BotCommand("mycredits", "Check your current review credits"),
+        BotCommand("submitwork", "Submit work for structured critique"),
+        BotCommand("support", "Open a support or report ticket"),
+        BotCommand("addprompts", "Admin: Add prompts via text"),
+        BotCommand("manageprompts", "Admin: Open prompt queue manager"),
+        BotCommand("addcredits", "Admin: Add credits to a user"),
+        BotCommand("resetcredits", "Admin: Reset credits for a user"),
+    ]
+    await application.bot.set_my_commands(commands)
+
 def main():
     init_db()
     keep_alive()
-    app = ApplicationBuilder().token(TOKEN).build()
 
+    app = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
+
+    # Register Commands
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("mycredits", cmd_mycredits))
     app.add_handler(CommandHandler("addcredits", cmd_addcredits))
@@ -876,38 +887,24 @@ def main():
     app.add_handler(CommandHandler("addprompts", cmd_addprompts))
     app.add_handler(CommandHandler("manageprompts", cmd_manageprompts))
     app.add_handler(CommandHandler("submitwork", cmd_submitwork))
-    # Set slash commands auto-complete list in Telegram
-    import asyncio
-    from telegram import BotCommand
 
-    async def register_commands():
-        commands = [
-            BotCommand("start", "Start the bot and view main menu"),
-            BotCommand("mycredits", "Check your current review credits"),
-            BotCommand("submitwork", "Submit work for structured critique"),
-            BotCommand("support", "Open a support or report ticket"),
-            BotCommand("addprompts", "Admin: Add prompts via text"),
-            BotCommand("manageprompts", "Admin: Open prompt queue manager"),
-            BotCommand("addcredits", "Admin: Add credits to a user"),
-            BotCommand("resetcredits", "Admin: Reset credits for a user"),
-        ]
-        await app.bot.set_my_commands(commands)
-
-    asyncio.get_event_loop().run_until_complete(register_commands())
-    GROUP_CHAT_ID = -1001234567890  # Replace with your actual Telegram Group ID
+    # Register Job Queue
+    group_chat_id = int(os.getenv("GROUP_CHAT_ID", "-1001234567890"))
     if app.job_queue:
         app.job_queue.run_repeating(
             send_scheduled_prompt,
-            interval=604800,  # 7 days in seconds
-            first=10,         # Fires 10s after script boot for testing
-            chat_id=GROUP_CHAT_ID,
+            interval=604800,
+            first=10,
+            chat_id=group_chat_id,
             name="weekly_prompt_job"
         )
+
+    # Register Fallback Handlers
     app.add_handler(CallbackQueryHandler(handle_callbacks))
-    app.add_handler(MessageHandler(filters.ALL, process_chat))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_chat))
 
     print("Bot is listening...")
     app.run_polling()
-
+    
 if __name__ == '__main__':
     main()
