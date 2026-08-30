@@ -125,7 +125,8 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if has_user_reviewed_post(user.id, parent_msg.message_id):
             return
-if words >= 20:
+
+        if words >= 20:
             log_post_review(user.id, parent_msg.message_id)
             add_critique(user.id)
             total = get_critiques(user.id)
@@ -166,9 +167,9 @@ if words >= 20:
                 chat_id=msg.chat_id,
                 message_thread_id=msg.message_thread_id,
                 text=(
-                    f"⚠️ Post Removed for {user.first_name}\n\n"
-                    f"You must leave 20+ word feedback using #review on 2 peer posts before submitting work.\n"
-                    f"Current Critiques: {critiques_done}/2"
+                    f"⚠️ **Post Removed for {user.first_name}**\n\n"
+                    f"You must leave 20+ word feedback using `#review` on 2 peer posts before submitting work.\n"
+                    f"**Current Critiques:** {critiques_done}/2"
                 ),
                 parse_mode="Markdown"
             )
@@ -186,5 +187,5 @@ def main():
     print("Bot is listening...")
     app.run_polling()
 
-if name == 'main':
+if __name__ == '__main__':
     main()
