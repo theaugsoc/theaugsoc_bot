@@ -571,16 +571,17 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sync_user(user.id, user.username)
 
     # CHECK FOR SUBMISSION REPLIES FIRST
-    # Inside process_chat:
     parent_msg = msg.reply_to_message
     if parent_msg and "Tags Selected:" in (parent_msg.text or ""):
         genre = context.user_data.get('submission_genre', 'general')
         post_type = context.user_data.get('submission_type', 'feedback')
         
+        # Parse Title and Body
         lines = msg.text.strip().splitlines()
         title = lines[0]
         content = "\n".join(lines[1:]) if len(lines) > 1 else title
         
+        # Save to database
         sub_id = create_submission(
             user.id, 
             f"@{user.username}" if user.username else user.first_name, 
@@ -590,36 +591,40 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             content
         )
         
-        preview = content[:300] + ("..." if len(content) > 300 else "")
-        card_text = (
+        # Format full post with explicit tags included in text body
+        formatted_post = (
             f"📖 **SUBMISSION #{sub_id}: {title.upper()}**\n"
-            f"✍️ Author: @{user.username if user.username else user.first_name} | Tags: #{genre} #{post_type}\n"
+            f"✍️ **Author:** @{user.username if user.username else user.first_name}\n"
+            f"🏷️ **Tags:** #{genre} #{post_type}\n"
+            f"--------------------------------------------------\n\n"
+            f"{content}\n\n"
             f"--------------------------------------------------\n"
-            f"{preview}\n"
-            f"--------------------------------------------------\n"
-            f"📊 Critiques Received: 0"
+            f"💬 *Reply directly to this post to leave a critique!*"
         )
 
         keyboard = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("💬 Leave Critique", callback_data=f"sub_rev_{sub_id}"),
-                InlineKeyboardButton("🔍 View Stack (0)", callback_data=f"sub_stack_{sub_id}")
+                InlineKeyboardButton("🔍 View Stack", callback_data=f"sub_stack_{sub_id}")
             ]
         ])
 
-        await context.bot.send_message(
+        # 1. Post the main submission card into Topic 8
+        card_msg = await context.bot.send_message(
             chat_id=msg.chat_id,
             message_thread_id=CRITIQUE_TOPIC_ID,
-            text=card_text,
+            text=formatted_post,
             reply_markup=keyboard,
             parse_mode="Markdown"
         )
 
+        # 2. Delete both the user's raw submission text AND the prompt message
         try:
             await msg.delete()
             await parent_msg.delete()
-        except Exception:
-            pass
+        except Exception as e:
+            logging.error(f"Failed to delete prompt or user message: {e}")
+
         return
 
     # Rest of your existing process_chat code continues below...
