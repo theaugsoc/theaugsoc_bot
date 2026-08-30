@@ -92,8 +92,6 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    conn.commit()
-    conn.close()
     
     # Pre-load initial prompts if queue is empty
     cursor.execute('SELECT COUNT(*) FROM prompts')
@@ -109,6 +107,7 @@ def init_db():
             'INSERT OR IGNORE INTO prompts (category, challenge_type, prompt_text) VALUES (?, ?, ?)',
             initial_prompts
         )
+
     conn.commit()
     conn.close()
 
