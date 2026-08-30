@@ -544,17 +544,28 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Enforce mandatory hashtags for raw chat messages posted directly in Critique Corner
-    if msg.message_thread_id == CRITIQUE_TOPIC_ID and not user.is_bot:
-        is_valid, _, _ = parse_and_validate_hashtags(msg.text or "")
-        if not is_valid and not msg.text.startswith("/submitwork"):
+    thread_id = getattr(msg, 'message_thread_id', None)
+    if thread_id == CRITIQUE_TOPIC_ID and not user.is_bot:
+        text_to_check = msg.text or msg.caption or ""
+        
+        # Always allow the /submitwork command to pass through for handling
+        if text_to_check.startswith("/submitwork"):
+            return
+
+        is_valid, _, _ = parse_and_validate_hashtags(text_to_check)
+        if not is_valid:
             try:
                 await msg.delete()
+            except Exception as e:
+                print(f"Failed to delete non-compliant message: {e}")
+
+            try:
                 await context.bot.send_message(
                     chat_id=user.id,
                     text=(
                         "⚠️ **Message Removed from #critique-corner**\n\n"
-                        "All submissions must include a **Genre** hashtag (`#poetry`, `#fiction`, `#nonfiction`) "
-                        "and a **Post Type** hashtag (`#critique`, `#submission`).\n\n"
+                        "All submissions must include at least one **Genre** hashtag (`#poetry`, `#fiction`, `#nonfiction`) "
+                        "and one **Post Type** hashtag (`#critique`, `#submission`).\n\n"
                         "Please use `/submitwork` to create a structured submission card!"
                     ),
                     parse_mode="Markdown"
