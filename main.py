@@ -81,6 +81,32 @@ def init_db():
             is_used INTEGER DEFAULT 0
         )
     ''')
+
+    # Submission Cards & Threaded Feedback Tables
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS submissions (
+            sub_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            author_tag TEXT,
+            title TEXT,
+            genre_tag TEXT,
+            post_tag TEXT,
+            content TEXT,
+            msg_id INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS submission_reviews (
+            review_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sub_id INTEGER,
+            reviewer_id INTEGER,
+            reviewer_tag TEXT,
+            review_text TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
     
     # Pre-load initial prompts if queue is empty
     cursor.execute('SELECT COUNT(*) FROM prompts')
@@ -173,6 +199,62 @@ def mark_prompt_used(prompt_id: int):
     cursor.execute('UPDATE prompts SET is_used = 1, priority = 0 WHERE prompt_id = ?', (prompt_id,))
     conn.commit()
     conn.close()
+
+# --- SUBMISSION & REVIEW HELPERS ---
+ALLOWED_GENRE_TAGS = {'#poetry', '#fiction', '#nonfiction', '#prose', '#essay'}
+ALLOWED_POST_TAGS = {'#critique', '#submission', '#feedback', '#wip'}
+
+def parse_and_validate_hashtags(text: str) -> tuple[bool, str, str]:
+    tokens = [t.lower() for t in text.split()]
+    found_genre = next((t for t in tokens if t in ALLOWED_GENRE_TAGS), None)
+    found_post = next((t for t in tokens if t in ALLOWED_POST_TAGS), None)
+    is_valid = bool(found_genre and found_post)
+    return is_valid, found_genre, found_post
+
+def create_submission(user_id: int, author_tag: str, title: str, genre_tag: str, post_tag: str, content: str) -> int:
+    conn = sqlite3.connect('critiques.db')
+    cursor = conn.cursor()
+    cursor.execute(
+        'INSERT INTO submissions (user_id, author_tag, title, genre_tag, post_tag, content) VALUES (?, ?, ?, ?, ?, ?)',
+        (user_id, author_tag, title, genre_tag, post_tag, content)
+    )
+    sub_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return sub_id
+
+def update_submission_msg_id(sub_id: int, msg_id: int):
+    conn = sqlite3.connect('critiques.db')
+    cursor = conn.cursor()
+    cursor.execute('UPDATE submissions SET msg_id = ? WHERE sub_id = ?', (msg_id, sub_id))
+    conn.commit()
+    conn.close()
+
+def add_submission_review(sub_id: int, reviewer_id: int, reviewer_tag: str, review_text: str):
+    conn = sqlite3.connect('critiques.db')
+    cursor = conn.cursor()
+    cursor.execute(
+        'INSERT INTO submission_reviews (sub_id, reviewer_id, reviewer_tag, review_text) VALUES (?, ?, ?, ?)',
+        (sub_id, reviewer_id, reviewer_tag, review_text)
+    )
+    conn.commit()
+    conn.close()
+
+def get_submission(sub_id: int):
+    conn = sqlite3.connect('critiques.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT sub_id, user_id, author_tag, title, genre_tag, post_tag, content, msg_id FROM submissions WHERE sub_id = ?', (sub_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row
+
+def get_submission_reviews(sub_id: int) -> list:
+    conn = sqlite3.connect('critiques.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT reviewer_tag, review_text, created_at FROM submission_reviews WHERE sub_id = ? ORDER BY review_id ASC', (sub_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
 
 def create_ticket(user_id: int, category: str, details: str) -> int:
     conn = sqlite3.connect('critiques.db')
@@ -347,6 +429,73 @@ async def cmd_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("🛠️ **The Aug Society Support Hub**\nPlease select a category:", reply_markup=keyboard, parse_mode="Markdown")
 
+async def cmd_submitwork(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    user = update.effective_user
+    
+    raw_text = msg.text.replace("/submitwork", "").strip()
+    lines = raw_text.splitlines()
+
+    if len(lines) < 2:
+        await msg.reply_text(
+            "✍️ **How to Submit Work for Critique:**\n\n"
+            "Format your message like this:\n"
+            "`/submitwork Title of Your Piece`\n"
+            "`#fiction #critique`\n"
+            "`Paste your full poem or story text here...`",
+            parse_mode="Markdown"
+        )
+        return
+
+    title = lines[0].strip()
+    tag_line = lines[1].strip()
+    content = "\n".join(lines[2:]).strip()
+
+    is_valid, genre_tag, post_tag = parse_and_validate_hashtags(tag_line)
+    if not is_valid:
+        await msg.reply_text(
+            "❌ **Missing Required Hashtags!**\n\n"
+            "Your submission must include at least one **Genre** tag (`#poetry`, `#fiction`, `#nonfiction`) "
+            "and one **Post Type** tag (`#critique`, `#submission`, `#feedback`).",
+            parse_mode="Markdown"
+        )
+        return
+
+    sub_id = create_submission(user.id, f"@{user.username}" if user.username else user.first_name, title, genre_tag, post_tag, content)
+    
+    # Format Card
+    preview = content[:300] + ("..." if len(content) > 300 else "")
+    card_text = (
+        f"📖 **SUBMISSION #{sub_id}: {title.upper()}**\n"
+        f"✍️ Author: @{user.username if user.username else user.first_name} | Tags: {genre_tag} {post_tag}\n"
+        f"--------------------------------------------------\n"
+        f"{preview}\n"
+        f"--------------------------------------------------\n"
+        f"📊 Critiques Received: 0"
+    )
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("💬 Leave Critique", callback_data=f"sub_rev_{sub_id}"),
+            InlineKeyboardButton("🔍 View Stack (0)", callback_data=f"sub_stack_{sub_id}")
+        ]
+    ])
+
+    sent_msg = await context.bot.send_message(
+        chat_id=msg.chat_id,
+        message_thread_id=CRITIQUE_TOPIC_ID,
+        text=card_text,
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
+    update_submission_msg_id(sub_id, sent_msg.message_id)
+
+    if msg.chat.type != 'private':
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+
 async def cmd_addprompts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     user = update.effective_user
@@ -394,6 +543,26 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg or not user or user.is_bot:
         return
 
+    # Enforce mandatory hashtags for raw chat messages posted directly in Critique Corner
+    if msg.message_thread_id == CRITIQUE_TOPIC_ID and not user.is_bot:
+        is_valid, _, _ = parse_and_validate_hashtags(msg.text or "")
+        if not is_valid and not msg.text.startswith("/submitwork"):
+            try:
+                await msg.delete()
+                await context.bot.send_message(
+                    chat_id=user.id,
+                    text=(
+                        "⚠️ **Message Removed from #critique-corner**\n\n"
+                        "All submissions must include a **Genre** hashtag (`#poetry`, `#fiction`, `#nonfiction`) "
+                        "and a **Post Type** hashtag (`#critique`, `#submission`).\n\n"
+                        "Please use `/submitwork` to create a structured submission card!"
+                    ),
+                    parse_mode="Markdown"
+                )
+            except Exception:
+                pass
+            return
+            
     # Admin .txt File Upload Handler in DM
     if update.effective_chat.type == 'private' and msg.document and await is_admin(msg.chat_id, user.id, context):
         doc = msg.document
@@ -535,6 +704,33 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
 
+    # Submission Cards & Threaded Reviews
+    if data.startswith("sub_rev_"):
+        sub_id = int(data.split("_")[2])
+        context.user_data['reviewing_sub_id'] = sub_id
+        await query.message.reply_text(
+            f"📝 **Writing Feedback for Submission #{sub_id}**\n"
+            f"Reply directly to this message with your critique. It will be attached under the main card!",
+            parse_mode="Markdown"
+        )
+        return
+
+    elif data.startswith("sub_stack_"):
+        sub_id = int(data.split("_")[2])
+        sub = get_submission(sub_id)
+        reviews = get_submission_reviews(sub_id)
+
+        if not reviews:
+            await query.answer("📭 No critiques have been submitted for this piece yet.", show_alert=True)
+            return
+
+        stack_text = f"📚 **Feedback Stack for #{sub_id} ({sub[3]}):**\n\n"
+        for reviewer_tag, r_text, r_time in reviews:
+            stack_text += f"👤 **{reviewer_tag}** _({r_time[:10]}):_\n{r_text}\n\n---\n"
+
+        await query.message.reply_text(stack_text, parse_mode="Markdown")
+        return
+        
     # Interactive Queue Manager Callbacks
     if data.startswith("q_view_"):
         cat = data.replace("q_view_", "")
@@ -665,6 +861,7 @@ def main():
     app.add_handler(CommandHandler("report", cmd_support))
     app.add_handler(CommandHandler("addprompts", cmd_addprompts))
     app.add_handler(CommandHandler("manageprompts", cmd_manageprompts))
+    app.add_handler(CommandHandler("submitwork", cmd_submitwork))
     # Set slash commands auto-complete list in Telegram
     import asyncio
     from telegram import BotCommand
@@ -673,11 +870,12 @@ def main():
         commands = [
             BotCommand("start", "Start the bot and view main menu"),
             BotCommand("mycredits", "Check your current review credits"),
-            BotCommand("addcredits", "Admin: Add credits to a user"),
-            BotCommand("resetcredits", "Admin: Reset credits for a user"),
+            BotCommand("submitwork", "Submit work for structured critique"),
             BotCommand("support", "Open a support or report ticket"),
             BotCommand("addprompts", "Admin: Add prompts via text"),
             BotCommand("manageprompts", "Admin: Open prompt queue manager"),
+            BotCommand("addcredits", "Admin: Add credits to a user"),
+            BotCommand("resetcredits", "Admin: Reset credits for a user"),
         ]
         await app.bot.set_my_commands(commands)
 
