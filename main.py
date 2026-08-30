@@ -17,9 +17,7 @@ from telegram.ext import (
 TOKEN = os.getenv('BOT_TOKEN', '8883883367:AAFc6zoJaz-K9CgZovzwpuAOHfN1IxUgOaU')
 CRITIQUE_TOPIC_ID = 8
 
-# Pending appeals tracker: { user_id: deleted_post_text }
-PENDING_APPEALS = {}
-AWAITING_REASON = set()
+USER_TICKET_STATE = {}  # { user_id: {"category": str, "draft_text": str} }
 
 # --- Flask Keep-Alive Server ---
 app_flask = Flask('')
@@ -55,6 +53,33 @@ def init_db():
             PRIMARY KEY (user_id, target_msg_id)
         )
     ''')
+    conn.commit()
+    conn.close()
+
+# ADD HERE:
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS tickets (
+            ticket_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            category TEXT,
+            details TEXT,
+            status TEXT DEFAULT 'OPEN'
+        )
+    ''')
+
+def create_ticket(user_id: int, category: str, details: str) -> int:
+    conn = sqlite3.connect('critiques.db')
+    cursor = conn.cursor()
+    cursor.execute('INSERT INTO tickets (user_id, category, details) VALUES (?, ?, ?)', (user_id, category, details))
+    ticket_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return ticket_id
+
+def update_ticket_status(ticket_id: int, status: str):
+    conn = sqlite3.connect('critiques.db')
+    cursor = conn.cursor()
+    cursor.execute('UPDATE tickets SET status = ? WHERE ticket_id = ?', (status, ticket_id))
     conn.commit()
     conn.close()
 
@@ -198,6 +223,23 @@ async def cmd_resetcredits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_critiques(target_id, 0)
     await msg.reply_text(f"🔄 Reset critique balance to **0** for user `{target_str}`.", parse_mode="Markdown")
 
+async def cmd_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    sync_user(user.id, user.username)
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📩 Post Appeal", callback_data="hub_cat_appeal")],
+        [InlineKeyboardButton("💳 Credit Dispute", callback_data="hub_cat_credits")],
+        [InlineKeyboardButton("🚩 Report Content/User", callback_data="hub_cat_report")],
+        [InlineKeyboardButton("❓ General Help", callback_data="hub_cat_other")]
+    ])
+    
+    if update.effective_chat.type != 'private':
+        bot_user = await context.bot.get_me()
+        await update.message.reply_text(f"Please reach out to me in private DM: https://t.me/{bot_user.username}?start=support")
+    else:
+        await update.message.reply_text("🛠️ **The Aug Society Support Hub**\nPlease select a category:", reply_markup=keyboard, parse_mode="Markdown")
+
 # --- Moderation & Appeal Logic ---
 async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
@@ -206,30 +248,36 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Direct Message Reason Handler for Appeals
-    if update.effective_chat.type == 'private' and user.id in AWAITING_REASON:
-        AWAITING_REASON.remove(user.id)
-        reason = msg.text or "No reason provided."
-        deleted_text = PENDING_APPEALS.pop(user.id, "[Content Unavailable]")
+    if update.effective_chat.type == 'private' and user.id in USER_TICKET_STATE:
+        state = USER_TICKET_STATE.pop(user.id)
+        category = state.get("category", "General Request")
+        details = msg.text or "No text provided."
+        draft = state.get("draft_text", "")
+        
+        full_details = f"{details}\n\n[Captured Draft: {draft}]" if draft else details
+        t_id = create_ticket(user.id, category, full_details)
 
         admin_text = (
-            f"📥 **NEW MODERATION APPEAL**\n\n"
-            f"**User:** {user.full_name} (@{user.username} | ID: `{user.id}`)\n"
-            f"**User's Appeal Reason:** {reason}\n\n"
-            f"**Deleted Draft Excerpt:**\n_{deleted_text[:500]}_"
+            f"🎫 **NEW SUPPORT TICKET #{t_id}**\n"
+            f"**Category:** {category}\n"
+            f"**User:** {user.full_name} (@{user.username} | ID: `{user.id}`)\n\n"
+            f"**Details:**\n{full_details}"
         )
+        
         buttons = [
             [
-                InlineKeyboardButton("✅ Grant 2 Credits & Notify", callback_data=f"app_grant_{user.id}"),
-                InlineKeyboardButton("❌ Reject Appeal", callback_data=f"app_rej_{user.id}")
+                InlineKeyboardButton("✅ Resolve & Grant 2 Credits", callback_data=f"tck_grant_{t_id}_{user.id}"),
+                InlineKeyboardButton("❌ Dismiss Ticket", callback_data=f"tck_dismiss_{t_id}_{user.id}")
             ]
         ]
+        
         await context.bot.send_message(
             chat_id=msg.chat_id,
             text=admin_text,
             reply_markup=InlineKeyboardMarkup(buttons),
             parse_mode="Markdown"
         )
-        await msg.reply_text("✅ Your appeal has been submitted to group admins for review.")
+        await msg.reply_text(f"✅ Ticket #{t_id} submitted to group admins.")
         return
 
     if msg.message_thread_id != CRITIQUE_TOPIC_ID:
@@ -289,7 +337,7 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         critiques_done = get_critiques(user.id)
         if critiques_done < 2:
-            PENDING_APPEALS[user.id] = text
+            USER_TICKET_STATE[user.id] = {"draft_text": text}
             try:
                 await msg.delete()
             except Exception:
@@ -322,35 +370,52 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
+    user = update.effective_user
 
-    if data.startswith("app_grant_"):
-        target_id = int(data.split("_")[2])
+    if data.startswith("hub_cat_"):
+        cat_map = {
+            "hub_cat_appeal": "Post Appeal",
+            "hub_cat_credits": "Credit Dispute",
+            "hub_cat_report": "Content/User Report",
+            "hub_cat_other": "General Inquiry"
+        }
+        selected = cat_map.get(data, "General Inquiry")
+        USER_TICKET_STATE[user.id] = {"category": selected}
+        await query.edit_message_text(f"📝 **Category Selected:** {selected}\n\nPlease reply with details for the admin team.")
+
+    elif data.startswith("tck_grant_"):
+        parts = data.split("_")
+        t_id, target_id = int(parts[2]), int(parts[3])
         add_critique(target_id, 2)
-        await query.edit_message_text(f"{query.message.text}\n\n✅ **APPROVED:** Granted 2 credits to user `{target_id}`.", parse_mode="Markdown")
+        update_ticket_status(t_id, "RESOLVED_GRANTED")
+        await query.edit_message_text(f"{query.message.text}\n\n✅ **RESOLVED:** Granted 2 credits to user `{target_id}`.", parse_mode="Markdown")
         try:
-            await context.bot.send_message(chat_id=target_id, text="🎉 Your appeal was approved! 2 critique credits have been added to your balance.")
+            await context.bot.send_message(chat_id=target_id, text=f"🎉 Ticket #{t_id} resolved! 2 critique credits added to your balance.")
         except Exception:
             pass
 
-    elif data.startswith("app_rej_"):
-        target_id = int(data.split("_")[2])
-        await query.edit_message_text(f"{query.message.text}\n\n❌ **REJECTED:** Appeal declined.", parse_mode="Markdown")
+    elif data.startswith("tck_dismiss_"):
+        parts = data.split("_")
+        t_id, target_id = int(parts[2]), int(parts[3])
+        update_ticket_status(t_id, "DISMISSED")
+        await query.edit_message_text(f"{query.message.text}\n\n❌ **DISMISSED:** Ticket closed.", parse_mode="Markdown")
         try:
-            await context.bot.send_message(chat_id=target_id, text="❌ Your appeal was reviewed and declined by community admins.")
+            await context.bot.send_message(chat_id=target_id, text=f"ℹ️ Ticket #{t_id} reviewed and closed by community admins.")
         except Exception:
             pass
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     sync_user(user.id, user.username)
+    
     if context.args and context.args[0] == "appeal":
-        if user.id in PENDING_APPEALS:
-            AWAITING_REASON.add(user.id)
-            await update.message.reply_text("Please reply to this message with a short explanation for your appeal:")
-        else:
-            await update.message.reply_text("No recent deleted posts found eligible for appeal.")
+        draft = USER_TICKET_STATE.get(user.id, {}).get("draft_text", "[No draft captured]")
+        USER_TICKET_STATE[user.id] = {"category": "Post Appeal", "draft_text": draft}
+        await update.message.reply_text("📩 **Post Appeal**: Please reply to this message with an explanation for your appeal.")
+    elif context.args and context.args[0] == "support":
+        await cmd_support(update, context)
     else:
-        await update.message.reply_text("Hello! I am The Aug Soc community manager bot. Type /mycredits to check your balance.")
+        await update.message.reply_text("Hello! I am The Aug Soc community manager bot. Type /mycredits to check balance or /support for help.")
 
 def main():
     init_db()
@@ -361,6 +426,8 @@ def main():
     app.add_handler(CommandHandler("mycredits", cmd_mycredits))
     app.add_handler(CommandHandler("addcredits", cmd_addcredits))
     app.add_handler(CommandHandler("resetcredits", cmd_resetcredits))
+    app.add_handler(CommandHandler("support", cmd_support))
+    app.add_handler(CommandHandler("report", cmd_support))
     app.add_handler(CallbackQueryHandler(handle_callbacks))
     app.add_handler(MessageHandler(filters.ALL, process_chat))
 
