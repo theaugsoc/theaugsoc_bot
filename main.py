@@ -534,7 +534,8 @@ async def enforce_critique_format(update: Update, context: ContextTypes.DEFAULT_
 
     # Skip format enforcement if user is replying to the tags prompt
     parent_msg = msg.reply_to_message
-    if parent_msg and "Tags Selected:" in (parent_msg.text or ""):
+    parent_text = parent_msg.text if parent_msg and parent_msg.text else ""
+    if "Tags Selected:" in parent_text:
         return
 
     # Check for mandatory hashtags
@@ -568,18 +569,20 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     sync_user(user.id, user.username)
 
-    # CHECK FOR SUBMISSION REPLIES FIRST
+    # CHECK FOR SUBMISSION REPLIES
     parent_msg = msg.reply_to_message
-    if parent_msg and "Tags Selected:" in (parent_msg.text or ""):
+    parent_text = parent_msg.text if parent_msg and parent_msg.text else ""
+
+    if "Tags Selected:" in parent_text:
         genre = context.user_data.get('submission_genre', 'general')
         post_type = context.user_data.get('submission_type', 'feedback')
         
-        # Parse Title and Body
+        # Parse Title and Content
         lines = msg.text.strip().splitlines()
         title = lines[0]
         content = "\n".join(lines[1:]) if len(lines) > 1 else title
         
-        # Save to database
+        # Create submission record in Database
         sub_id = create_submission(
             user.id, 
             f"@{user.username}" if user.username else user.first_name, 
@@ -589,7 +592,6 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             content
         )
         
-        # Format full post with explicit tags included in text body
         formatted_post = (
             f"📖 **SUBMISSION #{sub_id}: {title.upper()}**\n"
             f"✍️ **Author:** @{user.username if user.username else user.first_name}\n"
@@ -607,21 +609,21 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         ])
 
-        # 1. Post the main submission card into Topic 8
-        card_msg = await context.bot.send_message(
+        # 1. Send formatted card into the topic
+        await context.bot.send_message(
             chat_id=msg.chat_id,
-            message_thread_id=CRITIQUE_TOPIC_ID,
+            message_thread_id=msg.message_thread_id,
             text=formatted_post,
             reply_markup=keyboard,
             parse_mode="Markdown"
         )
 
-        # 2. Delete both the user's raw submission text AND the prompt message
+        # 2. Delete the user's raw text message and the bot's prompt message
         try:
             await msg.delete()
             await parent_msg.delete()
         except Exception as e:
-            logging.error(f"Failed to delete prompt or user message: {e}")
+            logging.error(f"Failed to delete messages: {e}")
 
         return
 
