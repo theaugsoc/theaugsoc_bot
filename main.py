@@ -665,6 +665,23 @@ def main():
     app.add_handler(CommandHandler("report", cmd_support))
     app.add_handler(CommandHandler("addprompts", cmd_addprompts))
     app.add_handler(CommandHandler("manageprompts", cmd_manageprompts))
+    # Set slash commands auto-complete list in Telegram
+    import asyncio
+    from telegram import BotCommand
+
+    async def register_commands():
+        commands = [
+            BotCommand("start", "Start the bot and view main menu"),
+            BotCommand("mycredits", "Check your current review credits"),
+            BotCommand("addcredits", "Admin: Add credits to a user"),
+            BotCommand("resetcredits", "Admin: Reset credits for a user"),
+            BotCommand("support", "Open a support or report ticket"),
+            BotCommand("addprompts", "Admin: Add prompts via text"),
+            BotCommand("manageprompts", "Admin: Open prompt queue manager"),
+        ]
+        await app.bot.set_my_commands(commands)
+
+    asyncio.get_event_loop().run_until_complete(register_commands())
     GROUP_CHAT_ID = -1001234567890  # Replace with your actual Telegram Group ID
     if app.job_queue:
         app.job_queue.run_repeating(
