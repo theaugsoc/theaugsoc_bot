@@ -493,7 +493,7 @@ async def cmd_addprompts(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     parts = msg.text.split(maxsplit=1)
-raw_text = parts[1].strip() if len(parts) > 1 else ""
+    raw_text = parts[1].strip() if len(parts) > 1 else ""
     if not raw_text:
         await msg.reply_text(
             "Usage:\n`/addprompts\ncategory | challenge_type | prompt text`\n\n"
