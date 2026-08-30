@@ -433,8 +433,12 @@ async def cmd_submitwork(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     user = update.effective_user
     
-    raw_text = msg.text.replace("/submitwork", "").strip()
-    lines = raw_text.splitlines()
+    # Strip command name including bot username suffix (e.g. /submitwork@TheAugSoc_bot)
+    full_text = msg.text or ""
+    first_space = full_text.find(" ")
+    raw_text = full_text[first_space:].strip() if first_space != -1 else ""
+
+    lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
 
     if len(lines) < 2:
         await msg.reply_text(
@@ -447,9 +451,9 @@ async def cmd_submitwork(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    title = lines[0].strip()
-    tag_line = lines[1].strip()
-    content = "\n".join(lines[2:]).strip()
+    title = lines[0]
+    tag_line = lines[1]
+    content = "\n".join(lines[2:]) if len(lines) > 2 else title
 
     is_valid, genre_tag, post_tag = parse_and_validate_hashtags(tag_line)
     if not is_valid:
@@ -463,7 +467,6 @@ async def cmd_submitwork(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     sub_id = create_submission(user.id, f"@{user.username}" if user.username else user.first_name, title, genre_tag, post_tag, content)
     
-    # Format Card
     preview = content[:300] + ("..." if len(content) > 300 else "")
     card_text = (
         f"📖 **SUBMISSION #{sub_id}: {title.upper()}**\n"
@@ -481,14 +484,13 @@ async def cmd_submitwork(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     ])
 
-    sent_msg = await context.bot.send_message(
+    await context.bot.send_message(
         chat_id=msg.chat_id,
         message_thread_id=CRITIQUE_TOPIC_ID,
         text=card_text,
         reply_markup=keyboard,
         parse_mode="Markdown"
     )
-    update_submission_msg_id(sub_id, sent_msg.message_id)
 
     if msg.chat.type != 'private':
         try:
@@ -548,7 +550,7 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if thread_id == CRITIQUE_TOPIC_ID and not user.is_bot:
         text_to_check = msg.text or msg.caption or ""
         
-        # Always allow the /submitwork command to pass through for handling
+        # Pass through if it's the submitwork command
         if text_to_check.startswith("/submitwork"):
             return
 
@@ -556,8 +558,9 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not is_valid:
             try:
                 await msg.delete()
+                print(f"[DEBUG] Deleted non-compliant message from user {user.id}")
             except Exception as e:
-                print(f"Failed to delete non-compliant message: {e}")
+                print(f"[DEBUG] Failed to delete message: {e}. Check if user is Admin or if Bot lacks Delete permission.")
 
             try:
                 await context.bot.send_message(
