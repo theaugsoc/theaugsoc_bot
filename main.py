@@ -532,6 +532,18 @@ async def enforce_critique_format(update: Update, context: ContextTypes.DEFAULT_
     if not msg or msg.message_thread_id != CRITIQUE_TOPIC_ID:
         return
 
+    #Debug
+    parent = msg.reply_to_message
+    p_text = parent.text if parent else None
+    print(f"[DEBUG enforce] msg_id={msg.message_id} | thread_id={getattr(msg, 'message_thread_id', None)} | parent_text={repr(p_text)}")
+
+    if msg.message_thread_id != CRITIQUE_TOPIC_ID:
+        return
+
+    if p_text and "Tags Selected:" in p_text:
+        print("[DEBUG enforce] Bypassing format check due to tag selection reply.")
+        return
+
     # Skip format enforcement if user is replying to the tags prompt
     parent_msg = msg.reply_to_message
     parent_text = parent_msg.text if parent_msg and parent_msg.text else ""
@@ -568,6 +580,14 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = update.effective_user
     sync_user(user.id, user.username)
+    
+    #Debug
+    parent = msg.reply_to_message
+    p_text = parent.text if parent else None
+    print(f"[DEBUG process] msg_id={msg.message_id} | thread_id={getattr(msg, 'message_thread_id', None)} | parent_text={repr(p_text)}")
+
+    if p_text and "Tags Selected:" in p_text:
+        print("[DEBUG process] Matched Tags Selected condition! Building card...")
 
     # CHECK FOR SUBMISSION REPLIES
     parent_msg = msg.reply_to_message
