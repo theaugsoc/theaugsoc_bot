@@ -529,15 +529,13 @@ async def cmd_manageprompts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
 async def enforce_critique_format(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
-    
-    # Check if message is in the Critique Topic (Topic ID = 8)
     if not msg or msg.message_thread_id != CRITIQUE_TOPIC_ID:
         return
 
-    # ALLOW REPLIES TO THE BOT'S TAG SELECTION MESSAGE
+    # Skip format enforcement if user is replying to the tags prompt
     parent_msg = msg.reply_to_message
     if parent_msg and "Tags Selected:" in (parent_msg.text or ""):
-        return  # Let process_chat handle this submission!
+        return
 
     # Check for mandatory hashtags
     text = msg.text or ""
@@ -625,6 +623,28 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logging.error(f"Failed to delete prompt or user message: {e}")
 
+        return
+
+    # CHECK FOR NESTED CRITIQUE REPLIES
+    if parent_msg and "Critique Submission #" in (parent_msg.text or ""):
+        sub_id = parent_msg.text.split("#")[1].split()[0]
+        critique_text = msg.text.strip()
+
+        target_reply_id = parent_msg.reply_to_message.message_id if parent_msg.reply_to_message else parent_msg.message_id
+
+        await context.bot.send_message(
+            chat_id=msg.chat_id,
+            message_thread_id=CRITIQUE_TOPIC_ID,
+            reply_to_message_id=target_reply_id,
+            text=f"💬 **Critique by @{user.username if user.username else user.first_name}:**\n\n{critique_text}",
+            parse_mode="Markdown"
+        )
+
+        try:
+            await msg.delete()
+            await parent_msg.delete()
+        except Exception:
+            pass
         return
 
     # Rest of your existing process_chat code continues below...
@@ -804,12 +824,16 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Submission Cards & Threaded Reviews
-    if data.startswith("sub_rev_"):
-        sub_id = int(data.split("_")[2])
-        context.user_data['reviewing_sub_id'] = sub_id
-        await query.message.reply_text(
-            f"📝 **Writing Feedback for Submission #{sub_id}**\n"
-            f"Reply directly to this message with your critique. It will be attached under the main card!",
+    elif data.startswith("sub_rev_"):
+        sub_id = data.replace("sub_rev_", "")
+        await query.answer()
+        
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            message_thread_id=CRITIQUE_TOPIC_ID,
+            reply_to_message_id=query.message.message_id,
+            text=f"✍️ **Critique Submission #{sub_id}**\n\n"
+                 f"Please reply directly to this message with your detailed critique.",
             parse_mode="Markdown"
         )
         return
@@ -994,8 +1018,8 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_callbacks))
     
     # Check topic message formatting first, then pass remaining text to general chat handler
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, enforce_critique_format))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_chat))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, enforce_critique_format))
 
     print("Bot is listening...")
     app.run_polling()
