@@ -88,6 +88,13 @@ def log_post_review(user_id: int, target_msg_id: int):
     conn.commit()
     conn.close()
 
+async def is_admin(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    try:
+        member = await context.bot.get_chat_member(chat_id, user_id)
+        return member.status in ['administrator', 'creator']
+    except Exception:
+        return False
+        
 # --- Bot Handler ---
 async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
@@ -96,6 +103,10 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if msg.message_thread_id != CRITIQUE_TOPIC_ID:
+        return
+
+    # EXEMPT GROUP ADMINS / OWNER FROM ALL RULES
+    if await is_admin(msg.chat_id, user.id, context):
         return
 
     text = msg.text or msg.caption or ""
