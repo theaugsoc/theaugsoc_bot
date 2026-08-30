@@ -14,7 +14,7 @@ from telegram.ext import (
     filters
 )
 
-TOKEN = os.getenv('BOT_TOKEN', '8883883367:AAFc6zoJaz-K9CgZovzwpuAOHfN1IxUgOa')
+TOKEN = os.getenv('BOT_TOKEN', '8883883367:AAFc6zoJaz-K9CgZovzwpuAOHfN1IxUgOaU')
 CRITIQUE_TOPIC_ID = 8
 
 # Pending appeals tracker: { user_id: deleted_post_text }
