@@ -14,7 +14,7 @@ from telegram.ext import (
     filters
 )
 
-TOKEN = os.getenv('BOT_TOKEN', '8883883367:AAHxa9MqsEmyoPPtfJQc-U1kz_U6uIWP-Rw')
+TOKEN = os.getenv('BOT_TOKEN', '8998221934:AAFNhEC9eVQfULC8ZrAWnPeJ-A-aD5EwIVA')
 CRITIQUE_TOPIC_ID = 8
 PROMPTS_TOPIC_ID = 9  # Update this to your exact "Prompts and Challenges" Topic ID
 
