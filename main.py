@@ -417,24 +417,26 @@ async def cmd_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_submitwork(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
-    user = update.effective_user
     
-    # Strip command name including bot username suffix (e.g. /submitwork@TheAugSoc_bot)
-    full_text = msg.text or ""
-    first_space = full_text.find(" ")
-    raw_text = full_text[first_space:].strip() if first_space != -1 else ""
+    # Interactive buttons for selecting genre
+    keyboard = [
+        [
+            InlineKeyboardButton("📖 Fiction", callback_data="subtag_genre_fiction"),
+            InlineKeyboardButton("✍️ Poetry", callback_data="subtag_genre_poetry"),
+        ],
+        [
+            InlineKeyboardButton("📝 Non-Fiction", callback_data="subtag_genre_nonfiction"),
+            InlineKeyboardButton("🎭 Script/Other", callback_data="subtag_genre_other"),
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
 
-    lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
-
-    if len(lines) < 2:
-        await msg.reply_text(
-            "✍️ **How to Submit Work for Critique:**\n\n"
-            "Format your message like this:\n"
-            "`/submitwork Title of Your Piece`\n"
-            "`#fiction #critique`\n"
-            "`Paste your full poem or story text here...`",
-            parse_mode="Markdown"
-        )
+    await msg.reply_text(
+        "🚀 **Submit Work for Critique**\n\n"
+        "Select the primary genre for your submission to begin:",
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
         return
 
     title = lines[0]
@@ -525,6 +527,35 @@ async def cmd_manageprompts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ])
     await msg.reply_text("🗂️ **Prompt Queue Manager**\nSelect a genre category to inspect or rearrange:", reply_markup=keyboard, parse_mode="Markdown")
     
+async def enforce_critique_format(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    
+    # Check if message is in the Critique Topic (Topic ID = 8)
+    if not msg or msg.message_thread_id != CRITIQUE_TOPIC_ID:
+        return
+
+    # Check for mandatory hashtags
+    text = msg.text or ""
+    has_genre = any(tag in text.lower() for tag in ['#fiction', '#poetry', '#nonfiction', '#prose'])
+    has_type = any(tag in text.lower() for tag in ['#critique', '#feedback', '#review'])
+
+    if not (has_genre and has_type):
+        try:
+            # Delete the non-compliant plain text message
+            await msg.delete()
+            
+            # Warn the user temporarily
+            warning = await context.bot.send_message(
+                chat_id=msg.chat_id,
+                message_thread_id=CRITIQUE_TOPIC_ID,
+                text=f"⚠️ @{msg.from_user.username}, plain text posts without required tags are auto-removed.\n"
+                     f"Please use `/submitwork` to format your submission properly."
+            )
+            await asyncio.sleep(10)
+            await warning.delete()
+        except Exception as e:
+            logging.error(f"Failed to delete message: {e}")
+
 # --- Moderation & Appeal Logic ---
 async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
@@ -710,6 +741,34 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data = query.data
     user = update.effective_user
+
+    if data.startswith("subtag_genre_"):
+        selected_genre = data.replace("subtag_genre_", "")
+        context.user_data['submission_genre'] = selected_genre
+        
+        type_keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🔍 Detailed Critique", callback_data="subtag_type_critique"),
+                InlineKeyboardButton("💬 General Feedback", callback_data="subtag_type_feedback"),
+            ]
+        ])
+        await query.edit_message_text(
+            f"✅ Genre: **#{selected_genre.capitalize()}**\n\nNow select the post type:",
+            reply_markup=type_keyboard,
+            parse_mode="Markdown"
+        )
+        return
+
+    elif data.startswith("subtag_type_"):
+        selected_type = data.replace("subtag_type_", "")
+        genre = context.user_data.get('submission_genre', 'general')
+        
+        await query.edit_message_text(
+            f"✅ **Tags Selected:** #{genre} #{selected_type}\n\n"
+            f"Please reply to this message with your piece's title and full text to post!",
+            parse_mode="Markdown"
+        )
+        return
 
     # Submission Cards & Threaded Reviews
     if data.startswith("sub_rev_"):
@@ -900,6 +959,9 @@ def main():
 
     # Register Fallback Handlers
     app.add_handler(CallbackQueryHandler(handle_callbacks))
+    
+    # Check topic message formatting first, then pass remaining text to general chat handler
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, enforce_critique_format))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_chat))
 
     print("Bot is listening...")
