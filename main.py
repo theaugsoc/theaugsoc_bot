@@ -1139,7 +1139,26 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    elif data.startswith("subtag_genre_"):
+        await query.answer()
+        selected_genre = data.replace("subtag_genre_", "")
+        context.user_data['submission_genre'] = selected_genre
+        
+        type_keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📄 Draft", callback_data="subtag_type_draft"),
+                InlineKeyboardButton("🛠️ Work-in-Progress", callback_data="subtag_type_workinprogress"),
+            ]
+        ])
+        await query.edit_message_text(
+            f"✅ Genre: **#{selected_genre.capitalize()}**\n\nNow select the post type:",
+            reply_markup=type_keyboard,
+            parse_mode="Markdown"
+        )
+        return
+    
     elif data.startswith("subtag_type_"):
+        await query.answer()
         selected_type = data.replace("subtag_type_", "")
         context.user_data['submission_type'] = selected_type  # Save selected post type
         genre = context.user_data.get('submission_genre', 'general')
@@ -1147,6 +1166,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             f"✅ **Tags Selected:** #{genre} #{selected_type}\n\n"
             f"Please reply to this message with your piece's title and full text to post!",
+            reply_markup=None,
             parse_mode="Markdown"
         )
         
