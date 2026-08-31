@@ -14,6 +14,47 @@ from telegram.ext import (
     filters
 )
 
+DB_FILE = 'critiques.db'
+
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    # 1. Create user_critiques table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_critiques (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            critique_count INTEGER DEFAULT 0
+        )
+    ''')
+    
+    # 2. Create submissions table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS submissions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            author_tag TEXT,
+            title TEXT,
+            genre_tag TEXT,
+            post_tag TEXT,
+            content TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # 3. Add missing author_tag column safely if table already exists without it
+    try:
+        cursor.execute("ALTER TABLE submissions ADD COLUMN author_tag TEXT")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    conn.commit()
+    conn.close()
+
+# Run DB initialization immediately on startup
+init_db()
+
 TOKEN = os.getenv('BOT_TOKEN', '8998221934:AAFNhEC9eVQfULC8ZrAWnPeJ-A-aD5EwIVA')
 CRITIQUE_TOPIC_ID = 8
 PROMPTS_TOPIC_ID = 9  # Update this to your exact "Prompts and Challenges" Topic ID
@@ -260,8 +301,7 @@ def update_ticket_status(ticket_id: int, status: str):
 
 def sync_user(user_id: int, username: str):
     try:
-        # Replace 'bot_database.db' with your actual .db file name if different
-        conn = sqlite3.connect('critiques.db') 
+        conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
         
         clean_username = f"@{username}" if username else "Anonymous"
