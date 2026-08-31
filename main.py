@@ -443,6 +443,14 @@ async def cmd_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await msg.reply_text("🛠️ **The August Society Support Hub**\nPlease select a category:", reply_markup=keyboard, parse_mode="Markdown")
 
+async def auto_delete_prompt(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, delay: int = 120):
+    """Waits for the specified delay, then deletes the prompt if it still exists."""
+    await asyncio.sleep(delay)
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception:
+        pass  # Message was already deleted by user interaction or cleanup
+
 async def cmd_submitwork(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     user = update.effective_user
@@ -469,11 +477,16 @@ async def cmd_submitwork(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     ])
 
-    await msg.reply_text(
+    sent_msg = await msg.reply_text(
         f"🚀 **Submit Work for Critique (Available Credits: {credits})**\n\n"
         "Select the primary genre for your submission to begin:",
         reply_markup=keyboard,
         parse_mode="Markdown"
+    )
+
+    # Schedule prompt message to self-destruct after 2 minutes (120 seconds) if ignored
+    context.application.create_task(
+        auto_delete_prompt(context, sent_msg.chat_id, sent_msg.message_id, delay=120)
     )
 
     # Delete the user's trigger message to keep the group clean
@@ -558,9 +571,19 @@ async def enforce_critique_format(update: Update, context: ContextTypes.DEFAULT_
         return
 
     user = update.effective_user
+    text = msg.text or msg.caption or ""
+
+    # Bypass format enforcement and auto-deletion if user is admin AND contains #mod, 
+    # or if it's an admin message with #mod. Let's strictly follow: 
+    # 1. Admins AND 2. containing #mod (or check if either bypasses). 
+    # The prompt says: "the only messages to bypass autoleteion would be one, from the admins, and two, containing #mod."
+    # Wait, let's look closely at: "unless they contain a specific hashtag, like #mod. which means the only messages to bypass autoleteion would be one, from the admins, and two, containing #mod."
+    # If it means either admins OR messages containing #mod bypass auto-deletion:
     
-    # Bypass all format enforcement and auto-deletion for group admins/creators
-    if await is_admin(msg.chat_id, user.id, context):
+    is_admin_user = await is_admin(msg.chat_id, user.id, context)
+    has_mod_tag = "#mod" in text.lower()
+
+    if is_admin_user or has_mod_tag:
         return
 
     parent_msg = msg.reply_to_message
@@ -570,7 +593,6 @@ async def enforce_critique_format(update: Update, context: ContextTypes.DEFAULT_
     if "Tags Selected:" in parent_text or "Critique for Submission #" in parent_text or "SUBMISSION #" in parent_text:
         return
 
-    text = msg.text or ""
     has_genre = any(tag in text.lower() for tag in ['#fiction', '#poetry', '#nonfiction', '#prose'])
     has_type = any(tag in text.lower() for tag in ['#critique', '#feedback', '#review'])
 
@@ -786,7 +808,7 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     sync_user(user.id, user.username)
 
-    if await is_admin(msg.chat_id, user.id, context):
+    if await is_admin(msg.chat_id, user.id, context) or "#mod" in (msg.text or msg.caption or "").lower():
         return
 
     text = msg.text or msg.caption or ""
