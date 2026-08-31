@@ -141,7 +141,7 @@ def keep_alive():
 
 # --- PROMPT DATABASE HELPERS ---
 def bulk_insert_prompts(prompt_list: list) -> tuple:
-    conn = sqlite3.connect('critiques.db')
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     added = 0
     skipped = 0
@@ -167,7 +167,7 @@ def bulk_insert_prompts(prompt_list: list) -> tuple:
     return added, skipped
 
 def get_prompts_by_category(category: str, limit: int = 5) -> list:
-    conn = sqlite3.connect('critiques.db')
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute(
         'SELECT prompt_id, challenge_type, prompt_text, priority FROM prompts WHERE category = ? AND is_used = 0 ORDER BY priority DESC, prompt_id ASC LIMIT ?',
@@ -178,7 +178,7 @@ def get_prompts_by_category(category: str, limit: int = 5) -> list:
     return rows
 
 def set_prompt_priority(prompt_id: int):
-    conn = sqlite3.connect('critiques.db')
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute('UPDATE prompts SET priority = 0 WHERE priority = 1')
     cursor.execute('UPDATE prompts SET priority = 1 WHERE prompt_id = ?', (prompt_id,))
@@ -186,14 +186,14 @@ def set_prompt_priority(prompt_id: int):
     conn.close()
 
 def delete_prompt(prompt_id: int):
-    conn = sqlite3.connect('critiques.db')
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute('DELETE FROM prompts WHERE prompt_id = ?', (prompt_id,))
     conn.commit()
     conn.close()
 
 def get_next_prompt_to_dispatch() -> tuple:
-    conn = sqlite3.connect('critiques.db')
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     # Check for admin priority selection first
     cursor.execute('SELECT prompt_id, category, challenge_type, prompt_text FROM prompts WHERE priority = 1 AND is_used = 0 LIMIT 1')
@@ -208,7 +208,7 @@ def get_next_prompt_to_dispatch() -> tuple:
     return row
 
 def mark_prompt_used(prompt_id: int):
-    conn = sqlite3.connect('critiques.db')
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute('UPDATE prompts SET is_used = 1, priority = 0 WHERE prompt_id = ?', (prompt_id,))
     conn.commit()
@@ -226,7 +226,7 @@ def parse_and_validate_hashtags(text: str) -> tuple[bool, str, str]:
     return is_valid, found_genre, found_post
 
 def create_submission(user_id: int, author_tag: str, title: str, genre_tag: str, post_tag: str, content: str) -> int:
-    conn = sqlite3.connect('critiques.db')
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute(
         'INSERT INTO submissions (user_id, author_tag, title, genre_tag, post_tag, content) VALUES (?, ?, ?, ?, ?, ?)',
@@ -238,14 +238,14 @@ def create_submission(user_id: int, author_tag: str, title: str, genre_tag: str,
     return sub_id
 
 def update_submission_msg_id(sub_id: int, msg_id: int):
-    conn = sqlite3.connect('critiques.db')
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute('UPDATE submissions SET msg_id = ? WHERE sub_id = ?', (msg_id, sub_id))
     conn.commit()
     conn.close()
 
 def add_submission_review(sub_id: int, reviewer_id: int, reviewer_tag: str, review_text: str):
-    conn = sqlite3.connect('critiques.db')
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute(
         'INSERT INTO submission_reviews (sub_id, reviewer_id, reviewer_tag, review_text) VALUES (?, ?, ?, ?)',
@@ -255,7 +255,7 @@ def add_submission_review(sub_id: int, reviewer_id: int, reviewer_tag: str, revi
     conn.close()
 
 def get_submission(sub_id: int):
-    conn = sqlite3.connect('critiques.db')
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute('SELECT sub_id, user_id, author_tag, title, genre_tag, post_tag, content, msg_id FROM submissions WHERE sub_id = ?', (sub_id,))
     row = cursor.fetchone()
@@ -263,7 +263,7 @@ def get_submission(sub_id: int):
     return row
 
 def get_submission_reviews(sub_id: int) -> list:
-    conn = sqlite3.connect('critiques.db')
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute('SELECT reviewer_tag, review_text, created_at FROM submission_reviews WHERE sub_id = ? ORDER BY review_id ASC', (sub_id,))
     rows = cursor.fetchall()
@@ -271,7 +271,7 @@ def get_submission_reviews(sub_id: int) -> list:
     return rows
 
 def create_ticket(user_id: int, category: str, details: str) -> int:
-    conn = sqlite3.connect('critiques.db')
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute('INSERT INTO tickets (user_id, category, message) VALUES (?, ?, ?)', (user_id, category, details))
     ticket_id = cursor.lastrowid
@@ -280,7 +280,7 @@ def create_ticket(user_id: int, category: str, details: str) -> int:
     return ticket_id
 
 def update_ticket_status(ticket_id: int, status: str):
-    conn = sqlite3.connect('critiques.db')
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute('UPDATE tickets SET status = ? WHERE ticket_id = ?', (status, ticket_id))
     conn.commit()
@@ -307,7 +307,7 @@ def sync_user(user_id: int, username: str):
         logging.error(f"Error in sync_user: {e}")
 
 def get_critiques(user_id: int) -> int:
-    conn = sqlite3.connect('critiques.db')
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute('SELECT critique_count FROM user_critiques WHERE user_id = ?', (user_id,))
     row = cursor.fetchone()
@@ -315,7 +315,7 @@ def get_critiques(user_id: int) -> int:
     return row[0] if row else 0
 
 def add_critique(user_id: int, amount: int = 1, username: str = None):
-    conn = sqlite3.connect('critiques.db')
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute('''
         INSERT INTO user_critiques (user_id, username, critique_count) VALUES (?, ?, ?)
@@ -327,14 +327,14 @@ def add_critique(user_id: int, amount: int = 1, username: str = None):
     conn.close()
 
 def set_critiques(user_id: int, amount: int):
-    conn = sqlite3.connect('critiques.db')
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute('UPDATE user_critiques SET critique_count = ? WHERE user_id = ?', (amount, user_id))
     conn.commit()
     conn.close()
 
 def use_critiques(user_id: int, count: int = 2):
-    conn = sqlite3.connect('critiques.db')
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute('''
         UPDATE user_critiques SET critique_count = MAX(0, critique_count - ?) WHERE user_id = ?
@@ -344,7 +344,7 @@ def use_critiques(user_id: int, count: int = 2):
 
 def get_user_id_by_username(username: str):
     clean_name = username.lstrip('@')
-    conn = sqlite3.connect('critiques.db')
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute('SELECT user_id FROM user_critiques WHERE LOWER(username) = LOWER(?)', (clean_name,))
     row = cursor.fetchone()
@@ -352,7 +352,7 @@ def get_user_id_by_username(username: str):
     return row[0] if row else None
 
 def has_user_reviewed_post(user_id: int, target_msg_id: int) -> bool:
-    conn = sqlite3.connect('critiques.db')
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute('SELECT 1 FROM review_logs WHERE user_id = ? AND target_msg_id = ?', (user_id, target_msg_id))
     exists = cursor.fetchone()
@@ -360,7 +360,7 @@ def has_user_reviewed_post(user_id: int, target_msg_id: int) -> bool:
     return exists is not None
 
 def log_post_review(user_id: int, target_msg_id: int):
-    conn = sqlite3.connect('critiques.db')
+    conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute('INSERT OR IGNORE INTO review_logs (user_id, target_msg_id) VALUES (?, ?)', (user_id, target_msg_id))
     conn.commit()
@@ -578,36 +578,37 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     resp = await msg.reply_text("Hello! I am The Aug Soc community manager bot. Type /mycredits to check balance or /support for help.")
     if msg.chat.type != 'private':
         asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 15))
-        
-    async def enforce_critique_format(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        msg = update.effective_message
-        if not msg or getattr(msg, 'message_thread_id', None) != CRITIQUE_TOPIC_ID:
-            return
-    
-        parent_msg = msg.reply_to_message
-        parent_text = parent_msg.text if parent_msg and parent_msg.text else ""
-    
-        # Bypass format enforcement for valid bot interaction workflows
-        if "Tags Selected:" in parent_text or "Critique for Submission #" in parent_text or "SUBMISSION #" in parent_text:
-            return
-    
-        text = msg.text or ""
-        has_genre = any(tag in text.lower() for tag in ['#fiction', '#poetry', '#nonfiction', '#prose'])
-        has_type = any(tag in text.lower() for tag in ['#critique', '#feedback', '#review'])
-    
-        if not (has_genre and has_type):
-            try:
-                await msg.delete()
-                warning = await context.bot.send_message(
-                    chat_id=msg.chat_id,
-                    message_thread_id=CRITIQUE_TOPIC_ID,
-                    text=f"⚠️ @{msg.from_user.username or 'user'}, plain text posts without required tags are auto-removed.\n"
-                         f"Please use `/submitwork` to format your submission properly."
-                )
-                await asyncio.sleep(10)
-                await warning.delete()
-            except Exception as e:
-                logging.error(f"Failed to delete message: {e}")
+
+
+async def enforce_critique_format(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    if not msg or getattr(msg, 'message_thread_id', None) != CRITIQUE_TOPIC_ID:
+        return
+
+    parent_msg = msg.reply_to_message
+    parent_text = parent_msg.text if parent_msg and parent_msg.text else ""
+
+    # Bypass format enforcement for valid bot interaction workflows
+    if "Tags Selected:" in parent_text or "Critique for Submission #" in parent_text or "SUBMISSION #" in parent_text:
+        return
+
+    text = msg.text or ""
+    has_genre = any(tag in text.lower() for tag in ['#fiction', '#poetry', '#nonfiction', '#prose'])
+    has_type = any(tag in text.lower() for tag in ['#critique', '#feedback', '#review'])
+
+    if not (has_genre and has_type):
+        try:
+            await msg.delete()
+            warning = await context.bot.send_message(
+                chat_id=msg.chat_id,
+                message_thread_id=CRITIQUE_TOPIC_ID,
+                text=f"⚠️ @{msg.from_user.username or 'user'}, plain text posts without required tags are auto-removed.\n"
+                     f"Please use `/submitwork` to format your submission properly."
+            )
+            await asyncio.sleep(10)
+            await warning.delete()
+        except Exception as e:
+            logging.error(f"Failed to delete message: {e}")
 
 # --- Moderation & Appeal Logic ---
 async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1061,7 +1062,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
 
- async def send_scheduled_prompt(context: ContextTypes.DEFAULT_TYPE):
+async def send_scheduled_prompt(context: ContextTypes.DEFAULT_TYPE):
     prompt_data = get_next_prompt_to_dispatch()
     if not prompt_data:
         return
@@ -1134,6 +1135,7 @@ def main():
     
     # Process incoming text messages
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_chat))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, enforce_critique_format))
 
     print("Bot is listening...")
     app.run_polling()
