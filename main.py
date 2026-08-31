@@ -219,6 +219,40 @@ def mark_prompt_used(prompt_id: int):
 ALLOWED_GENRE_TAGS = {'#poetry', '#fiction', '#nonfiction', '#prose', '#essay'}
 ALLOWED_POST_TAGS = {'#critique', '#submission', '#feedback', '#wip'}
 
+def split_text_into_chunks(text: str, max_chars: int = 3000) -> list[str]:
+    """Splits text into chunks of max_chars without breaking mid-paragraph where possible."""
+    if len(text) <= max_chars:
+        return [text]
+
+    chunks = []
+    current_chunk = ""
+    paragraphs = text.split("\n\n")
+
+    for para in paragraphs:
+        if len(current_chunk) + len(para) + 2 <= max_chars:
+            current_chunk += (para + "\n\n")
+        else:
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+                current_chunk = ""
+            # If a single paragraph is massive, break it by words
+            if len(para) > max_chars:
+                words = para.split()
+                for word in words:
+                    if len(current_chunk) + len(word) + 1 <= max_chars:
+                        current_chunk += (word + " ")
+                    else:
+                        chunks.append(current_chunk.strip())
+                        current_chunk = word + " "
+                current_chunk += "\n\n"
+            else:
+                current_chunk = para + "\n\n"
+
+    if current_chunk.strip():
+        chunks.append(current_chunk.strip())
+
+    return chunks
+
 def parse_and_validate_hashtags(text: str) -> tuple[bool, str, str]:
     tokens = [t.lower() for t in text.split()]
     found_genre = next((t for t in tokens if t in ALLOWED_GENRE_TAGS), None)
@@ -700,23 +734,12 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         genre = context.user_data.get('submission_genre', 'general')
         post_type = context.user_data.get('submission_type', 'feedback')
         
-        # Parse Title and Content
         lines = msg.text.strip().splitlines()
         title = lines[0]
         content = "\n".join(lines[1:]) if len(lines) > 1 else title
         
-        # Create submission record in Database
-        # Determine author mention and hashtag
-        if user.username:
-            author_display = f"@{user.username}"
-            user_tag = f"#{user.username}"
-        else:
-            author_display = user.first_name
-            # Remove spaces/special characters so first name is a valid hashtag
-            clean_name = "".join(e for e in user.first_name if e.isalnum())
-            user_tag = f"#{clean_name}"
+        author_display = f"@{user.username}" if user.username else user.first_name
 
-        # Create submission record in Database
         sub_id = create_submission(
             user.id, 
             author_display, 
@@ -726,42 +749,56 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             content
         )
         
-        # Build submission card with clear #submission and user hashtag
-        formatted_post = (
-            f"📖 **SUBMISSION #{sub_id}: {title.upper()}**\n"
-            f"✍️ **Author:** {author_display} {user_tag}\n"
-            f"🏷️ **Tags:** #{genre} #{post_type} #submission\n"
-            f"--------------------------------------------------\n\n"
-            f"{content}\n\n"
-            f"--------------------------------------------------\n"
-            f"💬 *Click 'Leave Critique' below or reply directly to review this work!*"
-        )
+        # Split content into parts if it's long
+        chunks = split_text_into_chunks(content, max_chars=3000)
+        total_parts = len(chunks)
 
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("💬 Leave Critique", callback_data=f"sub_rev_{sub_id}_{user.username or 'author'}")]
         ])
 
-        # 1. Post to Channel (Showcase feed)
-        if 'CHANNEL_ID' in globals() and CHANNEL_ID:
-            try:
-                await context.bot.send_message(
-                    chat_id=CHANNEL_ID,
-                    text=formatted_post,
-                    parse_mode="Markdown"
-                )
-            except Exception as e:
-                logging.error(f"Failed to post to channel: {e}")
+        for i, chunk in enumerate(chunks, 1):
+            part_suffix = f" **({i}/{total_parts})**" if total_parts > 1 else ""
+            
+            header = (
+                f"📖 **SUBMISSION #{sub_id}: {title.upper()}**{part_suffix}\n"
+                f"✍️ **Author:** {author_display}\n"
+                f"🏷️ **Tags:** #{genre} #{post_type} #submission\n"
+                f"--------------------------------------------------\n\n"
+            )
+            
+            footer = (
+                f"\n\n--------------------------------------------------\n"
+                f"💬 *Click 'Leave Critique' below or reply directly to review this work!*" 
+                if i == total_parts else ""
+            )
 
-        # 2. Post to Group Topic (Discussion feed)
-        await context.bot.send_message(
-            chat_id=msg.chat_id,
-            message_thread_id=msg.message_thread_id,
-            text=formatted_post,
-            reply_markup=keyboard,
-            parse_mode="Markdown"
-        )
+            formatted_post = f"{header}{chunk}{footer}"
+            
+            # Show the critique button only on the final part
+            reply_markup = keyboard if i == total_parts else None
 
-        # 2. Delete the user's raw text message and the bot's prompt message
+            # 1. Post to Channel (Optional Showcase Feed)
+            if 'CHANNEL_ID' in globals() and CHANNEL_ID:
+                try:
+                    await context.bot.send_message(
+                        chat_id=CHANNEL_ID,
+                        text=formatted_post,
+                        parse_mode="Markdown"
+                    )
+                except Exception as e:
+                    logging.error(f"Failed to post to channel: {e}")
+
+            # 2. Post to Group Topic
+            await context.bot.send_message(
+                chat_id=msg.chat_id,
+                message_thread_id=msg.message_thread_id,
+                text=formatted_post,
+                reply_markup=reply_markup,
+                parse_mode="Markdown"
+            )
+
+        # Cleanup original draft messages
         try:
             await msg.delete()
             await parent_msg.delete()
