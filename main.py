@@ -660,91 +660,23 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user = update.effective_user
-    sync_user(user.id, user.username)
-    
-    #Debug
-    parent = msg.reply_to_message
-    p_text = parent.text if parent else None
-
-    # CHECK FOR SUBMISSION REPLIES
     parent_msg = msg.reply_to_message
     parent_text = parent_msg.text if parent_msg and parent_msg.text else ""
 
-    # CHECK FOR CRITIQUE REPLIES
-    # CHECK FOR CRITIQUE REPLIES (AUTOMATIC #review & AUTHOR TAGGING)
-    if parent_msg and ("Critique for Submission #" in parent_text or "SUBMISSION #" in parent_text):
-        critique_text = msg.text.strip()
-        word_count = len(critique_text.split())
-
-        # 1. Enforce minimum word count (20 words)
-        if word_count < 20:
-            await context.bot.send_message(
-                chat_id=msg.chat_id,
-                message_thread_id=msg.message_thread_id,
-                reply_to_message_id=msg.message_id,
-                text=f"⚠️ **Critique Too Short:** Your critique must be at least **20 words** long to earn credit. (Current word count: {word_count}).",
-                parse_mode="Markdown"
-            )
-            return
-
-        # 2. Extract Submission ID, Author, and Target Message for Threading
-        if "Submission #" in parent_text:
-            sub_id = parent_text.split("Submission #")[1].split()[0].replace(")", "")
-            author_tag = parent_text.split("Author: ")[1].split(")")[0] if "Author: " in parent_text else ""
-            target_reply_id = parent_msg.reply_to_message.message_id if parent_msg.reply_to_message else parent_msg.message_id
-        else:
-            sub_id = parent_text.split("SUBMISSION #")[1].split(":")[0]
-            author_tag = ""
-            target_reply_id = parent_msg.message_id
-
-        # 3. Update DB Credit Points
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute("UPDATE user_critiques SET critique_count = critique_count + 1 WHERE user_id = ?", (user.id,))
-        conn.commit()
-        conn.close()
-
-        # 4. Automatically insert #review and author tag into final card
-        reviewer_name = f"@{user.username}" if user.username else user.first_name
-        formatted_review_card = (
-            f"📝 **#review for Submission #{sub_id}** {author_tag}\n"
-            f"👤 **Reviewer:** {reviewer_name}\n"
-            f"📊 **Word Count:** {word_count} words | **Credit Awarded:** +1 Point\n"
-            f"--------------------------------------------------\n\n"
-            f"{critique_text}"
-        )
-
-        await context.bot.send_message(
-            chat_id=msg.chat_id,
-            message_thread_id=msg.message_thread_id,
-            reply_to_message_id=target_reply_id,
-            text=formatted_review_card,
-            parse_mode="Markdown"
-        )
-
-        # 5. Clean up raw draft messages
-        try:
-            await msg.delete()
-            if "Critique for Submission #" in parent_text:
-                await parent_msg.delete()
-        except Exception:
-            pass
-
-        return
-
-    if "Tags Selected:" in parent_text:
+    # ==========================================
+    # WORKFLOW SUBMISSION (Tags Selected)
+    # ==========================================
+    if parent_msg and "Tags Selected:" in parent_text:
         genre = context.user_data.get('submission_genre', 'general')
         post_type = context.user_data.get('submission_type', 'feedback')
         
         full_text = msg.text.strip()
         lines = full_text.splitlines()
         
-        # If user provided multiple lines, treat line 1 as title and the rest as body
         if len(lines) > 1:
             title = lines[0].strip()
             content = "\n".join(lines[1:]).strip()
         else:
-            # If user pasted a single wall of text, take the first 8 words as the title
             words = full_text.split()
             title = " ".join(words[:8]) + "..." if len(words) > 8 else full_text
             content = full_text
@@ -752,6 +684,7 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         author_display = f"@{user.username}" if user.username else user.first_name
         author_hashtag = f"#{user.username}" if user.username else f"#{user.first_name.replace(' ', '_')}"
 
+        # Create single database record
         sub_id = create_submission(
             user.id, 
             author_display, 
@@ -761,16 +694,17 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             content
         )
 
-        # Deduct 2 credit for the submission
+        # Deduct credits once
         use_critiques(user.id, 2)
         
-        chunks = split_text_into_chunks(content, max_chars=3000)
+        chunks = split_text_into_chunks(content, max_chars=2500)
         total_parts = len(chunks)
 
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("💬 Leave Critique", callback_data=f"sub_rev_{sub_id}_{user.username or 'author'}")]
         ])
 
+        # Send all parts under the SAME submission ID
         for i, chunk in enumerate(chunks, 1):
             part_suffix = f" **({i}/{total_parts})**" if total_parts > 1 else ""
             
@@ -808,12 +742,10 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown"
             )
 
-        # Explicit cleanup of user text and bot menu messages
-        to_delete = [msg.message_id]
-        if parent_msg:
-            to_delete.append(parent_msg.message_id)
-            if parent_msg.reply_to_message:
-                to_delete.append(parent_msg.reply_to_message.message_id)
+        # Delete setup menu & raw user draft
+        to_delete = [msg.message_id, parent_msg.message_id]
+        if parent_msg.reply_to_message:
+            to_delete.append(parent_msg.reply_to_message.message_id)
 
         for mid in to_delete:
             try:
@@ -821,7 +753,12 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logging.debug(f"Could not delete message {mid}: {e}")
 
+        # CRITICAL: Hard exit so no fallback code can run
         return
+
+    # Clear user context data after workflow finishes
+    context.user_data.pop('submission_genre', None)
+    context.user_data.pop('submission_type', None)
 
     # CHECK FOR NESTED CRITIQUE REPLIES
     if parent_msg and "Critique Submission #" in (parent_msg.text or ""):
@@ -845,7 +782,6 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
-    # Rest of your existing process_chat code continues below...
             
     # Admin .txt File Upload Handler in DM
     if update.effective_chat.type == 'private' and msg.document and await is_admin(msg.chat_id, user.id, context):
