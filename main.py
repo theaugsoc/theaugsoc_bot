@@ -739,6 +739,8 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         content = "\n".join(lines[1:]) if len(lines) > 1 else title
         
         author_display = f"@{user.username}" if user.username else user.first_name
+        # Convert username to a valid hashtag (e.g., @JohnDoe -> #JohnDoe)
+        author_hashtag = f"#{user.username}" if user.username else f"#{user.first_name.replace(' ', '_')}"
 
         sub_id = create_submission(
             user.id, 
@@ -749,7 +751,6 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             content
         )
         
-        # Split content into parts if it's long
         chunks = split_text_into_chunks(content, max_chars=3000)
         total_parts = len(chunks)
 
@@ -763,7 +764,7 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             header = (
                 f"📖 **SUBMISSION #{sub_id}: {title.upper()}**{part_suffix}\n"
                 f"✍️ **Author:** {author_display}\n"
-                f"🏷️ **Tags:** #{genre} #{post_type} #submission\n"
+                f"🏷️ **Tags:** #{genre} #{post_type} #submission {author_hashtag}\n"
                 f"--------------------------------------------------\n\n"
             )
             
@@ -774,11 +775,8 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
             formatted_post = f"{header}{chunk}{footer}"
-            
-            # Show the critique button only on the final part
             reply_markup = keyboard if i == total_parts else None
 
-            # 1. Post to Channel (Optional Showcase Feed)
             if 'CHANNEL_ID' in globals() and CHANNEL_ID:
                 try:
                     await context.bot.send_message(
@@ -789,7 +787,6 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     logging.error(f"Failed to post to channel: {e}")
 
-            # 2. Post to Group Topic
             await context.bot.send_message(
                 chat_id=msg.chat_id,
                 message_thread_id=msg.message_thread_id,
@@ -798,12 +795,18 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown"
             )
 
-        # Cleanup original draft messages
-        try:
-            await msg.delete()
-            await parent_msg.delete()
-        except Exception as e:
-            logging.error(f"Failed to delete messages: {e}")
+        # Explicit cleanup of user text and bot menu messages
+        to_delete = [msg.message_id]
+        if parent_msg:
+            to_delete.append(parent_msg.message_id)
+            if parent_msg.reply_to_message:
+                to_delete.append(parent_msg.reply_to_message.message_id)
+
+        for mid in to_delete:
+            try:
+                await context.bot.delete_message(chat_id=msg.chat_id, message_id=mid)
+            except Exception as e:
+                logging.debug(f"Could not delete message {mid}: {e}")
 
         return
 
