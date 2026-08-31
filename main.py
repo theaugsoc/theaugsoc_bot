@@ -739,7 +739,6 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         content = "\n".join(lines[1:]) if len(lines) > 1 else title
         
         author_display = f"@{user.username}" if user.username else user.first_name
-        # Convert username to a valid hashtag (e.g., @JohnDoe -> #JohnDoe)
         author_hashtag = f"#{user.username}" if user.username else f"#{user.first_name.replace(' ', '_')}"
 
         sub_id = create_submission(
@@ -750,6 +749,9 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"#{post_type}", 
             content
         )
+
+        # Deduct 2 credit for the submission
+        use_critiques(user.id, 2)
         
         chunks = split_text_into_chunks(content, max_chars=3000)
         total_parts = len(chunks)
