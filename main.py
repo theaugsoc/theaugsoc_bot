@@ -10,7 +10,6 @@ import logging
 import asyncio
 import os
 from threading import Thread
-from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import (
     Application,
