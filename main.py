@@ -108,7 +108,7 @@ app_flask = Flask('')
 
 @app_flask.route('/')
 def home():
-    return "The Aug Soc Bot is awake and running!"
+    return "Dr. Augustus is awake and running!"
 
 def run_flask():
     log = logging.getLogger('werkzeug')
@@ -481,7 +481,7 @@ async def cmd_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Automatically clean up both the user command and the bot reply after 15 seconds
         asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 15))
     else:
-        await msg.reply_text("🛠️ **The Aug Society Support Hub**\nPlease select a category:", reply_markup=keyboard, parse_mode="Markdown")
+        await msg.reply_text("🛠️ **The August Society Support Hub**\nPlease select a category:", reply_markup=keyboard, parse_mode="Markdown")
 
 async def cmd_submitwork(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
@@ -581,7 +581,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await cmd_support(update, context)
             return
 
-    resp = await msg.reply_text("Hello! I am The Aug Soc community manager bot. Type /mycredits to check balance or /support for help.")
+    resp = await msg.reply_text("Hello! I am The August Society community manager bot. Type /mycredits to check balance or /support for help.")
     if msg.chat.type != 'private':
         asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 15))
 
