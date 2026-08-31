@@ -1214,7 +1214,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         use_critiques(user.id, 50)
         await query.message.edit_text("👑 **Role Badge Unlocked!** Please contact an admin with your desired custom title.", parse_mode="Markdown")
 
-   elif data.startswith("tck_dismiss_"):
+    elif data.startswith("tck_dismiss_"):
         parts = data.split("_")
         if len(parts) >= 4:
             t_id, target_id = int(parts[2]), int(parts[3])
@@ -1224,7 +1224,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(chat_id=target_id, text=f"ℹ️ Ticket #{t_id} reviewed and closed by community admins.")
             except Exception:
                 pass
-
+                
     # --- Paste the Join Request handlers here ---
     elif data.startswith("join_approve_"):
         parts = data.split("_")
