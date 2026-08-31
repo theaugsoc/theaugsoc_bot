@@ -736,9 +736,18 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         genre = context.user_data.get('submission_genre', 'general')
         post_type = context.user_data.get('submission_type', 'feedback')
         
-        lines = msg.text.strip().splitlines()
-        title = lines[0]
-        content = "\n".join(lines[1:]) if len(lines) > 1 else title
+        full_text = msg.text.strip()
+        lines = full_text.splitlines()
+        
+        # If user provided multiple lines, treat line 1 as title and the rest as body
+        if len(lines) > 1:
+            title = lines[0].strip()
+            content = "\n".join(lines[1:]).strip()
+        else:
+            # If user pasted a single wall of text, take the first 8 words as the title
+            words = full_text.split()
+            title = " ".join(words[:8]) + "..." if len(words) > 8 else full_text
+            content = full_text
         
         author_display = f"@{user.username}" if user.username else user.first_name
         author_hashtag = f"#{user.username}" if user.username else f"#{user.first_name.replace(' ', '_')}"
