@@ -72,6 +72,8 @@ def bulk_insert_prompts(prompt_list: list) -> tuple:
         cat = item[0].strip().lower()
         if len(item) == 3:
             ctype = item[1].strip().lower()
+            if ctype == 'daily':
+                ctype = 'quick prompt'
             text = item[2].strip()
         else:
             ctype = 'weekly'
@@ -1387,6 +1389,57 @@ async def track_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sync_user(member.id, member.username)
         logging.info(f"Recorded new member: {member.full_name} (@{member.username} | ID: {member.id})")
         
+async def send_conditional_prompt(context: ContextTypes.DEFAULT_TYPE):
+    from datetime import datetime
+    now = datetime.now()
+    weekday = now.weekday() # 0: Mon, 2: Wed, 5: Sat
+    day_of_month = now.day
+
+    target_type = None
+    if day_of_month == 1:
+        target_type = 'monthly'
+    elif weekday == 0 or weekday == 2: # Monday or Wednesday
+        target_type = 'quick prompt'
+    elif weekday == 5: # Saturday
+        target_type = 'weekly'
+    else:
+        return # Do not post on other days
+
+    # Fetch prompt matching the required challenge type from DB queue
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute(
+        'SELECT prompt_id, category, challenge_type, prompt_text FROM prompts WHERE is_used = 0 AND challenge_type = ? ORDER BY priority DESC, prompt_id ASC LIMIT 1',
+        (target_type,)
+    )
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return
+
+    prompt_id, category, challenge_type, prompt_text = row
+    chat_id = context.job.chat_id
+
+    tag_cat = f"#{category.capitalize()}"
+    tag_type = f"#{challenge_type.replace('_', ' ').title().replace(' ', '')}"
+
+    formatted_message = (
+        f"✍️ **COMMUNITY WRITING PROMPT**\n"
+        f"Category: {tag_cat} | Type: {tag_type}\n\n"
+        f"{prompt_text}\n\n"
+        f"--- \n"
+        f"💬 Share your response or post work inspired by this prompt in `#critique-corner`!"
+    )
+
+    await context.bot.send_message(
+        chat_id=chat_id,
+        message_thread_id=PROMPTS_TOPIC_ID,
+        text=formatted_message,
+        parse_mode="Markdown"
+    )
+    mark_prompt_used(prompt_id)
+
 def main():
     app = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
 
@@ -1407,12 +1460,11 @@ def main():
     # Register Job Queue
     group_chat_id = int(os.getenv("GROUP_CHAT_ID", "-1001234567890"))
     if app.job_queue:
-        app.job_queue.run_repeating(
-            send_scheduled_prompt,
-            interval=604800,
-            first=10,
+        app.job_queue.run_daily(
+            send_conditional_prompt,
+            time=datetime.strptime("09:00:00", "%H:%M:%S").time(),
             chat_id=group_chat_id,
-            name="weekly_prompt_job"
+            name="conditional_prompt_job"
         )
         app.job_queue.run_repeating(
             update_leaderboard_topic,
