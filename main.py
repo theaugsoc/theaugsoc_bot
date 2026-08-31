@@ -813,15 +813,42 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
     # ==========================================
-    # WORKFLOW SUBMISSION (Tags Selected)
+    # WORKFLOW SUBMISSION (Pen Name & Content)
     # ==========================================
-    # ==========================================
-    # WORKFLOW SUBMISSION (Tags Selected)
-    # ==========================================
-    if parent_msg and "Tags Selected:" in parent_text:
+    if context.user_data.get('waiting_for_pen_name'):
+        # Step 1: Capture the Pen Name provided by the user
+        pen_name = msg.text.strip()
+        context.user_data['pen_name'] = pen_name
+        context.user_data['waiting_for_pen_name'] = False
+        context.user_data.get('waiting_for_content', True) # Set next step flag
+        
+        # Clean up user's pen name message to keep chat tidy
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+
+        # Ask for the actual writing content (Title + Body)
+        prompt_msg = await context.bot.send_message(
+            chat_id=msg.chat_id,
+            message_thread_id=msg.message_thread_id if hasattr(msg, 'message_thread_id') else None,
+            text=f"✅ Pen Name recorded as **{pen_name}**.\n\nNow, please reply with your **Title on the first line**, followed by your content:",
+            parse_mode="Markdown"
+        )
+        context.user_data['prompt_msg_id'] = prompt_msg.message_id
+        return
+
+    if context.user_data.get('waiting_for_content'):
+        # Step 2: Capture Title and Content, build post using Pen Name
+        context.user_data['waiting_for_content'] = False
         genre = context.user_data.get('submission_genre', 'general')
         post_type = context.user_data.get('submission_type', 'feedback')
+        pen_name = context.user_data.get('pen_name', 'Anonymous')
         
+        # Format pen name for hashtag (replace spaces with underscores)
+        formatted_pen_hashtag = f"#{pen_name.replace(' ', '_')}"
+        author_display = pen_name
+
         full_text = msg.text.strip()
         lines = full_text.splitlines()
         
@@ -832,11 +859,8 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             words = full_text.split()
             title = " ".join(words[:8]) + "..." if len(words) > 8 else full_text
             content = full_text
-        
-        author_display = f"@{user.username}" if user.username else user.first_name
-        author_hashtag = f"#{user.username}" if user.username else f"#{user.first_name.replace(' ', '_')}"
 
-        # Create single database record
+        # Create database record
         sub_id = create_submission(
             user.id, 
             author_display, 
@@ -846,7 +870,7 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             content
         )
 
-        # Deduct credits once
+        # Deduct credits
         use_critiques(user.id, 2)
         
         chunks = split_text_into_chunks(content, max_chars=2500)
@@ -856,14 +880,14 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("💬 Leave Critique", callback_data=f"sub_rev_{sub_id}_{user.username or 'author'}")]
         ])
 
-        # Send all parts under the SAME submission ID
+        # Send all parts under the submission ID
         for i, chunk in enumerate(chunks, 1):
             part_suffix = f" ({i}/{total_parts})" if total_parts > 1 else ""
             
             header = (
                 f"📖 SUBMISSION #{sub_id}: {title.upper()}{part_suffix}\n"
                 f"✍️ Author: {author_display}\n"
-                f"🏷️ Tags: #{genre} #{post_type} #submission {author_hashtag}\n"
+                f"🏷️ Tags: #{genre} #{post_type} #submission {formatted_pen_hashtag}\n"
                 f"--------------------------------------------------\n\n"
             )
             
@@ -894,10 +918,11 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode=None
             )
 
-        # Delete setup menu & raw user draft
-        to_delete = [msg.message_id, parent_msg.message_id]
-        if parent_msg.reply_to_message:
-            to_delete.append(parent_msg.reply_to_message.message_id)
+        # Clean up temporary prompt and user messages
+        prompt_msg_id = context.user_data.pop('prompt_msg_id', None)
+        to_delete = [msg.message_id]
+        if prompt_msg_id:
+            to_delete.append(prompt_msg_id)
 
         for mid in to_delete:
             try:
@@ -905,11 +930,11 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logging.debug(f"Could not delete message {mid}: {e}")
 
+        # Clear remaining submission context data
+        context.user_data.pop('submission_genre', None)
+        context.user_data.pop('submission_type', None)
+        context.user_data.pop('pen_name', None)
         return
-
-    # Clear user context data after workflow finishes
-    context.user_data.pop('submission_genre', None)
-    context.user_data.pop('submission_type', None)
 
     # CHECK FOR NESTED CRITIQUE REPLIES
     if parent_msg and "Critique Submission #" in (parent_msg.text or ""):
@@ -1174,7 +1199,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['submission_type'] = selected_type  
         genre = context.user_data.get('submission_genre', 'general')
         
-        # Set a flag telling your message handler the next text input is the pen name
+        # Set a flag telling the message handler the next text input is the pen name
         context.user_data['waiting_for_pen_name'] = True
         
         sent_message = await query.edit_message_text(
@@ -1184,8 +1209,6 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
 
-        # 5 minute delay to let user type out or paste their writing with plenty time
-        
         context.application.create_task(
             auto_delete_prompt(context, sent_message.chat_id, sent_message.message_id, delay=300)
         )
