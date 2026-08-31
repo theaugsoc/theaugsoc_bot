@@ -478,10 +478,10 @@ async def cmd_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if msg.chat.type != 'private':
         bot_user = await context.bot.get_me()
         resp = await msg.reply_text(f"Please reach out to me in private DM: https://t.me/{bot_user.username}?start=support")
+        # Automatically clean up both the user command and the bot reply after 15 seconds
         asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 15))
     else:
         await msg.reply_text("🛠️ **The Aug Society Support Hub**\nPlease select a category:", reply_markup=keyboard, parse_mode="Markdown")
-
 
 async def cmd_submitwork(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
