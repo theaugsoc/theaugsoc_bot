@@ -939,7 +939,7 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # CASE B: STANDALONE DRAFT SUBMISSION
-    if not is_real_reply and words > 0:
+    if not is_real_reply and words > 0 and "Tags Selected:" not in p_text:
         if words > 1000:
             try:
                 await msg.delete()
