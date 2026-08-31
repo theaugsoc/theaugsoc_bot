@@ -52,6 +52,7 @@ CRITIQUE_TOPIC_ID = 8
 PROMPTS_TOPIC_ID = 9  # Update this to your exact "Prompts and Challenges" Topic ID
 RESOURCE_HUB_TOPIC_ID = 10  # Update this to your exact Resource Hub Topic ID
 CHANNEL_ID = os.getenv('CHANNEL_ID', "@theaugustsociety")
+LEADERBOARD_TOPIC_ID = 485  # Update with your dedicated Leaderboard Topic ID
 
 USER_TICKET_STATE = {}  # { user_id: {"category": str, "draft_text": str} }
 
@@ -333,6 +334,15 @@ def log_post_review(user_id: int, target_msg_id: int):
     conn.commit()
     conn.close()
 
+def get_top_users(limit: int = 10) -> list:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT username, critique_count FROM user_critiques ORDER BY critique_count DESC LIMIT %s', (limit,))
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return rows
+
 # --- Helper Functions ---
 async def is_admin(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     try:
@@ -465,6 +475,36 @@ async def cmd_submitresource(update: Update, context: ContextTypes.DEFAULT_TYPE)
             reply_markup=keyboard,
             parse_mode="Markdown"
         )
+
+async def cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    top_users = get_top_users(10)
+    
+    text = "🏆 **Community Review Leaderboard** 🏆\n\n"
+    for idx, (uname, count) in enumerate(top_users, 1):
+        display_name = uname or f"User #{idx}"
+        text += f"{idx}. {display_name} — **{count} credits**\n"
+        
+    await msg.reply_text(text, parse_mode="Markdown")
+
+async def cmd_shop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    user = update.effective_user
+    sync_user(user.id, user.username)
+    credits = get_critiques(user.id)
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✍️ Custom Prompt (10 Credits)", callback_data="shop_buy_prompt")],
+        [InlineKeyboardButton("🌟 Showcase: Spotlight & Queue (25 Credits)", callback_data="shop_buy_showcase")],
+        [InlineKeyboardButton("👑 Permanent Role Badge (50 Credits)", callback_data="shop_buy_badge")]
+    ])
+    
+    await msg.reply_text(
+        f"🛍️ **The August Society Credit Shop** (Your Balance: **{credits} Credits**)\n\n"
+        "Spend your earned review credits on exclusive community perks:",
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
         
 async def auto_delete_prompt(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, delay: int = 120):
     """Waits for the specified delay, then deletes the prompt if it still exists."""
@@ -867,6 +907,17 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text("✅ Your resource has been submitted to the moderators for review. You'll be notified when it's posted!")
             return
 
+        if category == "Custom Prompt Purchase":
+            use_critiques(user.id, 10)
+            conn = get_db_connection() # or sqlite3.connect(DB_FILE) depending on your db setup
+            cursor = conn.cursor()
+            cursor.execute('INSERT INTO prompts (category, challenge_type, prompt_text, priority) VALUES (?, ?, ?, ?)', ('custom', 'weekly', details, 0))
+            conn.commit()
+            cursor.close()
+            conn.close()
+            await msg.reply_text("✅ Your custom prompt has been deducted (10 credits) and sent to admins for review before entering the queue!")
+            return
+
         draft = state.get("draft_text", "")
         full_details = f"{details}\n\n[Captured Draft: {draft}]" if draft else details
         t_id = create_ticket(user.id, category, full_details)
@@ -1050,6 +1101,30 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(stack_text, parse_mode="Markdown")
         return
 
+    elif data == "shop_buy_prompt":
+        credits = get_critiques(user.id)
+        if credits < 10:
+            await query.answer("❌ You need at least 10 credits to submit a custom prompt.", show_alert=True)
+            return
+        USER_TICKET_STATE[user.id] = {"category": "Custom Prompt Purchase"}
+        await query.message.edit_text("✍️ **Custom Prompt Submission**\nPlease reply to this message with your prompt text. Once approved by admins, it will be queued to appear within the next 3 turns.", parse_mode="Markdown")
+
+    elif data == "shop_buy_showcase":
+        credits = get_critiques(user.id)
+        if credits < 25:
+            await query.answer("❌ You need at least 25 credits for the Showcase perk.", show_alert=True)
+            return
+        use_critiques(user.id, 25)
+        await query.message.edit_text("🌟 **Showcase Purchased!** Your next submission will automatically be pinned to the channel and pushed to the front of the review queue.", parse_mode="Markdown")
+
+    elif data == "shop_buy_badge":
+        credits = get_critiques(user.id)
+        if credits < 50:
+            await query.answer("❌ You need at least 50 credits for a Role Badge.", show_alert=True)
+            return
+        use_critiques(user.id, 50)
+        await query.message.edit_text("👑 **Role Badge Unlocked!** Please contact an admin with your desired custom title.", parse_mode="Markdown")
+
     # Interactive Queue Manager Callbacks
     if data.startswith("q_view_"):
         cat = data.replace("q_view_", "")
@@ -1219,8 +1294,26 @@ async def post_init(application: Application):
         BotCommand("manageprompts", "Admin: Open prompt queue manager"),
         BotCommand("addcredits", "Admin: Add credits to a user"),
         BotCommand("resetcredits", "Admin: Reset credits for a user"),
+        BotCommand("leaderboard", "View review leaderboard"),
+        BotCommand("shop", "Spend credits on perks and rewards"),
     ]
     await application.bot.set_my_commands(commands)
+
+async def update_leaderboard_topic(context: ContextTypes.DEFAULT_TYPE):
+    chat_id = context.job.chat_id
+    top_users = get_top_users(10)
+    
+    text = "🏆 **Daily Community Review Leaderboard** 🏆\n\n"
+    for idx, (uname, count) in enumerate(top_users, 1):
+        display_name = uname or f"User #{idx}"
+        text += f"{idx}. {display_name} — **{count} credits**\n"
+        
+    await context.bot.send_message(
+        chat_id=chat_id,
+        message_thread_id=LEADERBOARD_TOPIC_ID,
+        text=text,
+        parse_mode="Markdown"
+    )
 
 def main():
     app = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
@@ -1236,6 +1329,8 @@ def main():
     app.add_handler(CommandHandler("manageprompts", cmd_manageprompts))
     app.add_handler(CommandHandler("submitwork", cmd_submitwork))
     app.add_handler(CommandHandler("submitresource", cmd_submitresource))
+    app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
+    app.add_handler(CommandHandler("shop", cmd_shop))
 
     # Register Job Queue
     group_chat_id = int(os.getenv("GROUP_CHAT_ID", "-1001234567890"))
@@ -1246,6 +1341,13 @@ def main():
             first=10,
             chat_id=group_chat_id,
             name="weekly_prompt_job"
+        )
+        app.job_queue.run_repeating(
+            update_leaderboard_topic,
+            interval=86400,  # Every 24 hours
+            first=15,
+            chat_id=group_chat_id,
+            name="daily_leaderboard_job"
         )
 
     # Register Handlers
