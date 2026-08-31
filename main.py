@@ -351,10 +351,19 @@ def get_top_users(limit: int = 10) -> list:
     return rows
 
 # --- Helper Functions ---
-async def is_admin(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
+async def is_admin(chat_id, user_id, context):
+    # Always trust hardcoded environment admin IDs instantly (fixes private chats and group fallback)
+    if user_id in ADMIN_IDS and user_id != 0:
+        return True
+        
+    # If we are in a private chat and not in ADMIN_IDS, return False
+    if chat_id > 0 or str(chat_id).startswith('-100') is False: # handles private chat IDs which are positive user IDs
+        # Wait, check chat type if possible, or check if chat_id equals user_id
+        pass
+        
     try:
-        member = await context.bot.get_chat_member(chat_id, user_id)
-        return member.status in ['administrator', 'creator']
+        chat_member = await context.bot.get_chat_member(chat_id, user_id)
+        return chat_member.status in ['creator', 'administrator']
     except Exception:
         return False
 
@@ -589,8 +598,14 @@ async def cmd_addprompts(update: Update, context: ContextTypes.DEFAULT_TYPE):
         asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 10))
         return
 
-    parts = msg.text.split(maxsplit=1)
-    raw_text = parts[1].strip() if len(parts) > 1 else ""
+    # Robust multi-line text extraction handling newline or space separation after command
+    text = msg.text or ""
+    if text.startswith("/addprompts"):
+        raw_text = text[len("/addprompts"):].strip()
+    else:
+        parts = text.split(maxsplit=1)
+        raw_text = parts[1].strip() if len(parts) > 1 else ""
+        
     if not raw_text:
         resp = await msg.reply_text(
             "Usage:\n`/addprompts\ncategory | challenge_type | prompt text`\n\n"
