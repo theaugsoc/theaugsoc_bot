@@ -839,7 +839,13 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if context.user_data.get('waiting_for_content'):
-        # Step 2: Capture Title and Content, build post using Pen Name
+        # Step 2: Immediately capture and delete the user's input message to keep chat tidy
+        user_msg_id = msg.message_id
+        try:
+            await msg.delete()
+        except Exception as e:
+            logging.error(f"Could not delete user submission text message: {e}")
+
         context.user_data['waiting_for_content'] = False
         genre = context.user_data.get('submission_genre', 'general')
         post_type = context.user_data.get('submission_type', 'feedback')
@@ -918,17 +924,13 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode=None
             )
 
-        # Clean up temporary prompt and user messages
+        # Clean up temporary prompt message
         prompt_msg_id = context.user_data.pop('prompt_msg_id', None)
-        to_delete = [msg.message_id]
         if prompt_msg_id:
-            to_delete.append(prompt_msg_id)
-
-        for mid in to_delete:
             try:
-                await context.bot.delete_message(chat_id=msg.chat_id, message_id=mid)
+                await context.bot.delete_message(chat_id=msg.chat_id, message_id=prompt_msg_id)
             except Exception as e:
-                logging.debug(f"Could not delete message {mid}: {e}")
+                logging.debug(f"Could not delete prompt message {prompt_msg_id}: {e}")
 
         # Clear remaining submission context data
         context.user_data.pop('submission_genre', None)
