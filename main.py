@@ -6,6 +6,7 @@ from threading import Thread
 from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import (
+    Application,
     ApplicationBuilder,
     ContextTypes,
     MessageHandler,
@@ -120,6 +121,8 @@ def keep_alive():
     t.start()
 
     # Pre-load initial prompts if queue is empty
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
     cursor.execute('SELECT COUNT(*) FROM prompts')
     if cursor.fetchone()[0] == 0:
         initial_prompts = [
@@ -133,8 +136,7 @@ def keep_alive():
             'INSERT OR IGNORE INTO prompts (category, challenge_type, prompt_text) VALUES (?, ?, ?)',
             initial_prompts
         )
-
-    conn.commit()
+        conn.commit()
     conn.close()
 
 # --- PROMPT DATABASE HELPERS ---
@@ -271,7 +273,7 @@ def get_submission_reviews(sub_id: int) -> list:
 def create_ticket(user_id: int, category: str, details: str) -> int:
     conn = sqlite3.connect('critiques.db')
     cursor = conn.cursor()
-    cursor.execute('INSERT INTO tickets (user_id, category, details) VALUES (?, ?, ?)', (user_id, category, details))
+    cursor.execute('INSERT INTO tickets (user_id, category, message) VALUES (?, ?, ?)', (user_id, category, details))
     ticket_id = cursor.lastrowid
     conn.commit()
     conn.close()
@@ -371,21 +373,6 @@ async def is_admin(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYP
         return member.status in ['administrator', 'creator']
     except Exception:
         return False
-
-# --- Command Handlers ---
-# --- HELPER FOR DB USER LOOKUP ---
-def get_user_id_by_username(username: str):
-    raw_user = username.replace("@", "").strip()
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT user_id FROM user_critiques WHERE LOWER(username) IN (?, ?)",
-        (raw_user.lower(), f"@{raw_user}".lower())
-    )
-    row = cursor.fetchone()
-    conn.close()
-    return row[0] if row else None
-
 
 # --- COMMAND HANDLERS ---
 async def cmd_mycredits(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -593,49 +580,34 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 15))
         
     async def enforce_critique_format(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.effective_message
-    if not msg or msg.message_thread_id != CRITIQUE_TOPIC_ID:
-        return
-
-    #Debug
-    parent = msg.reply_to_message
-    p_text = parent.text if parent else None
-    print(f"[DEBUG enforce] msg_id={msg.message_id} | thread_id={getattr(msg, 'message_thread_id', None)} | parent_text={repr(p_text)}")
-
-    if msg.message_thread_id != CRITIQUE_TOPIC_ID:
-        return
-
-    if p_text and "Tags Selected:" in p_text:
-        print("[DEBUG enforce] Bypassing format check due to tag selection reply.")
-        return
-
-    # Skip format enforcement if user is replying to the tags prompt
-    parent_msg = msg.reply_to_message
-    parent_text = parent_msg.text if parent_msg and parent_msg.text else ""
-    if "Tags Selected:" in parent_text:
-        return
-
-    # Check for mandatory hashtags
-    text = msg.text or ""
-    has_genre = any(tag in text.lower() for tag in ['#fiction', '#poetry', '#nonfiction', '#prose'])
-    has_type = any(tag in text.lower() for tag in ['#critique', '#feedback', '#review'])
-
-    if not (has_genre and has_type):
-        try:
-            # Delete non-compliant plain text
-            await msg.delete()
-            
-            # Warn user temporarily
-            warning = await context.bot.send_message(
-                chat_id=msg.chat_id,
-                message_thread_id=CRITIQUE_TOPIC_ID,
-                text=f"⚠️ @{msg.from_user.username}, plain text posts without required tags are auto-removed.\n"
-                     f"Please use `/submitwork` to format your submission properly."
-            )
-            await asyncio.sleep(10)
-            await warning.delete()
-        except Exception as e:
-            logging.error(f"Failed to delete message: {e}")
+        msg = update.effective_message
+        if not msg or getattr(msg, 'message_thread_id', None) != CRITIQUE_TOPIC_ID:
+            return
+    
+        parent_msg = msg.reply_to_message
+        parent_text = parent_msg.text if parent_msg and parent_msg.text else ""
+    
+        # Bypass format enforcement for valid bot interaction workflows
+        if "Tags Selected:" in parent_text or "Critique for Submission #" in parent_text or "SUBMISSION #" in parent_text:
+            return
+    
+        text = msg.text or ""
+        has_genre = any(tag in text.lower() for tag in ['#fiction', '#poetry', '#nonfiction', '#prose'])
+        has_type = any(tag in text.lower() for tag in ['#critique', '#feedback', '#review'])
+    
+        if not (has_genre and has_type):
+            try:
+                await msg.delete()
+                warning = await context.bot.send_message(
+                    chat_id=msg.chat_id,
+                    message_thread_id=CRITIQUE_TOPIC_ID,
+                    text=f"⚠️ @{msg.from_user.username or 'user'}, plain text posts without required tags are auto-removed.\n"
+                         f"Please use `/submitwork` to format your submission properly."
+                )
+                await asyncio.sleep(10)
+                await warning.delete()
+            except Exception as e:
+                logging.error(f"Failed to delete message: {e}")
 
 # --- Moderation & Appeal Logic ---
 async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1089,24 +1061,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
 
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    sync_user(user.id, user.username)
-    
-    if context.args:
-        arg = context.args[0].lower()
-        if arg == "appeal":
-            draft = USER_TICKET_STATE.get(user.id, {}).get("draft_text", "[No draft captured]")
-            USER_TICKET_STATE[user.id] = {"category": "Post Appeal", "draft_text": draft}
-            await update.message.reply_text("📩 **Post Appeal**: Please reply to this message with an explanation for your appeal.")
-            return
-        elif arg == "support":
-            await cmd_support(update, context)
-            return
-
-    await update.message.reply_text("Hello! I am The Aug Soc community manager bot. Type /mycredits to check balance or /support for help.")
-    
-async def send_scheduled_prompt(context: ContextTypes.DEFAULT_TYPE):
+ async def send_scheduled_prompt(context: ContextTypes.DEFAULT_TYPE):
     prompt_data = get_next_prompt_to_dispatch()
     if not prompt_data:
         return
@@ -1179,7 +1134,6 @@ def main():
     
     # Process incoming text messages
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_chat))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, enforce_critique_format))
 
     print("Bot is listening...")
     app.run_polling()
