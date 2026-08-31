@@ -46,7 +46,7 @@ async def auto_delete_messages(bot, chat_id: int, message_ids: list, delay: int 
             logging.debug(f"Auto-delete failed for message {msg_id}: {e}")
 
 
-TOKEN = os.getenv('BOT_TOKEN', '8998221934:AAFNhEC9eVQfULC8ZrAWnPeJ-A-aD5EwIVA')
+TOKEN = os.getenv('BOT_TOKEN', '8998221934:AAEA8SXPZlGrcNexLOTJ86XnpGaZXQIdnL4')
 CRITIQUE_TOPIC_ID = 8
 PROMPTS_TOPIC_ID = 9  # Update this to your exact "Prompts and Challenges" Topic ID
 CHANNEL_ID = os.getenv('CHANNEL_ID', None)  # Optional: e.g. -1001234567890 or "@your_channel"
