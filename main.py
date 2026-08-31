@@ -33,74 +33,6 @@ async def auto_delete_messages(bot, chat_id: int, message_ids: list, delay: int 
         except Exception as e:
             logging.debug(f"Auto-delete failed for message {msg_id}: {e}")
 
-# --- Consolidated Database Initialization ---
-def init_db():
-    conn = sqlite3.connect(DB_FILE, timeout=10, check_same_thread=False)
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS user_critiques (
-            user_id INTEGER PRIMARY KEY,
-            username TEXT,
-            critique_count INTEGER DEFAULT 0
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS tickets (
-            ticket_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            username TEXT,
-            category TEXT,
-            message TEXT,
-            status TEXT DEFAULT 'OPEN',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS prompts (
-            prompt_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            category TEXT,
-            challenge_type TEXT,
-            prompt_text TEXT,
-            priority INTEGER DEFAULT 0,
-            is_used INTEGER DEFAULT 0
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS submissions (
-            sub_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            author_tag TEXT,
-            title TEXT,
-            genre_tag TEXT,
-            post_tag TEXT,
-            content TEXT,
-            msg_id INTEGER,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS submission_reviews (
-            review_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            sub_id INTEGER,
-            reviewer_id INTEGER,
-            reviewer_tag TEXT,
-            review_text TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS review_logs (
-            user_id INTEGER,
-            target_msg_id INTEGER,
-            PRIMARY KEY (user_id, target_msg_id)
-        )
-    ''')
-
-    conn.commit()
-    conn.close()
-
-init_db()
 
 TOKEN = os.getenv('BOT_TOKEN', '8998221934:AAFNhEC9eVQfULC8ZrAWnPeJ-A-aD5EwIVA')
 CRITIQUE_TOPIC_ID = 8
@@ -109,43 +41,6 @@ CHANNEL_ID = os.getenv('CHANNEL_ID', None)  # Optional: e.g. -1001234567890 or "
 
 USER_TICKET_STATE = {}  # { user_id: {"category": str, "draft_text": str} }
 
-
-# --- Flask Keep-Alive Server ---
-app_flask = Flask('')
-
-@app_flask.route('/')
-def home():
-    return "Dr. Augustus is awake and running!"
-
-def run_flask():
-    log = logging.getLogger('werkzeug')
-    log.setLevel(logging.ERROR)
-    port = int(os.environ.get("PORT", 8080))
-    app_flask.run(host='0.0.0.0', port=port)
-
-def keep_alive():
-    t = Thread(target=run_flask)
-    t.daemon = True
-    t.start()
-
-    # Pre-load initial prompts if queue is empty
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute('SELECT COUNT(*) FROM prompts')
-    if cursor.fetchone()[0] == 0:
-        initial_prompts = [
-            ('poetry', 'weekly', 'Write a 14-line sonnet exploring the concept of digital silence.'),
-            ('fiction', 'micro', 'Write a 100-word story that starts with: "The package arrived three days late, completely unsealed."'),
-            ('non-fiction', 'weekly', 'Draft a reflective piece on an object from your childhood that no longer exists.'),
-            ('poetry', 'micro', 'Craft a free verse poem of under 10 lines focusing strictly on sound and tactile imagery.'),
-            ('fiction', 'monthly_arc', 'Write a scene featuring two characters forced to negotiate in a place where speaking aloud is dangerous.')
-        ]
-        cursor.executemany(
-            'INSERT OR IGNORE INTO prompts (category, challenge_type, prompt_text) VALUES (?, ?, ?)',
-            initial_prompts
-        )
-        conn.commit()
-    conn.close()
 
 # --- PROMPT DATABASE HELPERS ---
 def bulk_insert_prompts(prompt_list: list) -> tuple:
@@ -269,18 +164,93 @@ def parse_and_validate_hashtags(text: str) -> tuple[bool, str, str]:
     is_valid = bool(found_genre and found_post)
     return is_valid, found_genre, found_post
 
-def create_submission(user_id: int, author_tag: str, title: str, genre_tag: str, post_tag: str, content: str) -> int:
-    conn = sqlite3.connect(DB_FILE)
+def sync_user(user_id: int, username: str = None):
+    clean_username = f"@{username.lstrip('@')}" if username else None
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO user_critiques (user_id, username, critique_count)
+        VALUES (%s, %s, 0)
+        ON CONFLICT (user_id) 
+        DO UPDATE SET username = COALESCE(EXCLUDED.username, user_critiques.username);
+    ''', (user_id, clean_username))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+def get_critiques(user_id: int) -> int:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT critique_count FROM user_critiques WHERE user_id = %s', (user_id,))
+    row = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    return row[0] if row else 0
+
+def add_critique(user_id: int, amount: int = 1, username: str = None):
+    clean_username = f"@{username.lstrip('@')}" if username else None
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO user_critiques (user_id, username, critique_count)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (user_id) 
+        DO UPDATE SET 
+            critique_count = user_critiques.critique_count + EXCLUDED.critique_count,
+            username = COALESCE(EXCLUDED.username, user_critiques.username);
+    ''', (user_id, clean_username, amount))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+def set_critiques(user_id: int, amount: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('UPDATE user_critiques SET critique_count = %s WHERE user_id = %s', (amount, user_id))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+def use_critiques(user_id: int, count: int = 2):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE user_critiques 
+        SET critique_count = GREATEST(0, critique_count - %s) 
+        WHERE user_id = %s
+    ''', (count, user_id))
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+def get_user_id_by_username(username: str):
+    clean_name = username.lstrip('@')
+    with_at = f"@{clean_name}"
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        'INSERT INTO submissions (user_id, author_tag, title, genre_tag, post_tag, content) VALUES (?, ?, ?, ?, ?, ?)',
-        (user_id, author_tag, title, genre_tag, post_tag, content)
+        'SELECT user_id FROM user_critiques WHERE LOWER(username) = LOWER(%s) OR LOWER(username) = LOWER(%s)', 
+        (clean_name, with_at)
     )
-    sub_id = cursor.lastrowid
+    row = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    return row[0] if row else None
+
+def create_submission(user_id: int, author_tag: str, title: str, genre_tag: str, post_tag: str, content: str) -> int:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO submissions (user_id, author_tag, title, genre_tag, post_tag, content)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        RETURNING sub_id;
+    ''', (user_id, author_tag, title, genre_tag, post_tag, content))
+    sub_id = cursor.fetchone()[0]
     conn.commit()
+    cursor.close()
     conn.close()
     return sub_id
-
+    
 def update_submission_msg_id(sub_id: int, msg_id: int):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -329,76 +299,6 @@ def update_ticket_status(ticket_id: int, status: str):
     cursor.execute('UPDATE tickets SET status = ? WHERE ticket_id = ?', (status, ticket_id))
     conn.commit()
     conn.close()
-
-def sync_user(user_id: int, username: str):
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
-        clean_username = f"@{username}" if username else "Anonymous"
-        
-        cursor.execute("SELECT user_id FROM user_critiques WHERE user_id = ?", (user_id,))
-        row = cursor.fetchone()
-        
-        if row:
-            cursor.execute("UPDATE user_critiques SET username = ? WHERE user_id = ?", (clean_username, user_id))
-        else:
-            cursor.execute("INSERT INTO user_critiques (user_id, username, critique_count) VALUES (?, ?, 0)", (user_id, clean_username))
-            
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        logging.error(f"Error in sync_user: {e}")
-
-def get_critiques(user_id: int) -> int:
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute('SELECT critique_count FROM user_critiques WHERE user_id = ?', (user_id,))
-    row = cursor.fetchone()
-    conn.close()
-    return row[0] if row else 0
-
-def add_critique(user_id: int, amount: int = 1, username: str = None):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO user_critiques (user_id, username, critique_count) VALUES (?, ?, ?)
-        ON CONFLICT(user_id) DO UPDATE SET 
-            critique_count = critique_count + EXCLUDED.critique_count,
-            username = COALESCE(EXCLUDED.username, user_critiques.username)
-    ''', (user_id, username, amount))
-    conn.commit()
-    conn.close()
-
-def set_critiques(user_id: int, amount: int):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute('UPDATE user_critiques SET critique_count = ? WHERE user_id = ?', (amount, user_id))
-    conn.commit()
-    conn.close()
-
-def use_critiques(user_id: int, count: int = 2):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute('''
-        UPDATE user_critiques SET critique_count = MAX(0, critique_count - ?) WHERE user_id = ?
-    ''', (count, user_id))
-    conn.commit()
-    conn.close()
-
-def get_user_id_by_username(username: str):
-    clean_name = username.lstrip('@')
-    with_at = f"@{clean_name}"
-    
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute(
-        'SELECT user_id FROM user_critiques WHERE LOWER(username) = LOWER(?) OR LOWER(username) = LOWER(?)', 
-        (clean_name, with_at)
-    )
-    row = cursor.fetchone()
-    conn.close()
-    return row[0] if row else None
 
 def has_user_reviewed_post(user_id: int, target_msg_id: int) -> bool:
     conn = sqlite3.connect(DB_FILE)
@@ -1124,9 +1024,6 @@ async def post_init(application: Application):
     await application.bot.set_my_commands(commands)
 
 def main():
-    init_db()
-    keep_alive()
-
     app = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
 
     # Register Commands
