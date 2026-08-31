@@ -1150,29 +1150,36 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton("🛠️ Work-in-Progress", callback_data="subtag_type_workinprogress"),
             ]
         ])
-        await query.edit_message_text(
+        
+        # Edit message to show type selection
+        sent_message = await query.edit_message_text(
             f"✅ Genre: **#{selected_genre.capitalize()}**\n\nNow select the post type:",
             reply_markup=type_keyboard,
             parse_mode="Markdown"
         )
+        
+        # Optional: Clean up this intermediate step quickly if they abandon it halfway (e.g., 15 seconds)
+        context.application.create_task(
+            auto_delete_prompt(context, sent_message.chat_id, sent_message.message_id, delay=15)
+        )
         return
-    
+
     elif data.startswith("subtag_type_"):
         await query.answer()
         selected_type = data.replace("subtag_type_", "")
-        context.user_data['submission_type'] = selected_type  # Save selected post type
+        context.user_data['submission_type'] = selected_type  
         genre = context.user_data.get('submission_genre', 'general')
         
-        await query.edit_message_text(
+        sent_message = await query.edit_message_text(
             f"✅ **Tags Selected:** #{genre} #{selected_type}\n\n"
             f"Please reply to this message with your piece's title and full text to post!",
             reply_markup=None,
             parse_mode="Markdown"
         )
         
-        # Schedule this final instruction message to self-destruct after 150 seconds if ignored
+        # Give the user plenty of time to type and reply (e.g., 300 seconds / 5 minutes)
         context.application.create_task(
-            auto_delete_prompt(context, query.message.chat_id, query.message.message_id, delay=150)
+            auto_delete_prompt(context, sent_message.chat_id, sent_message.message_id, delay=300)
         )
         return
 
