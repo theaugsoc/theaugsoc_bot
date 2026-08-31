@@ -644,6 +644,67 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parent_msg = msg.reply_to_message
     parent_text = parent_msg.text if parent_msg and parent_msg.text else ""
 
+    # CHECK FOR CRITIQUE REPLIES
+    # CHECK FOR CRITIQUE REPLIES (AUTOMATIC #review & AUTHOR TAGGING)
+    if parent_msg and ("Critique for Submission #" in parent_text or "SUBMISSION #" in parent_text):
+        critique_text = msg.text.strip()
+        word_count = len(critique_text.split())
+
+        # 1. Enforce minimum word count (20 words)
+        if word_count < 20:
+            await context.bot.send_message(
+                chat_id=msg.chat_id,
+                message_thread_id=msg.message_thread_id,
+                reply_to_message_id=msg.message_id,
+                text=f"⚠️ **Critique Too Short:** Your critique must be at least **20 words** long to earn credit. (Current word count: {word_count}).",
+                parse_mode="Markdown"
+            )
+            return
+
+        # 2. Extract Submission ID, Author, and Target Message for Threading
+        if "Submission #" in parent_text:
+            sub_id = parent_text.split("Submission #")[1].split()[0].replace(")", "")
+            author_tag = parent_text.split("Author: ")[1].split(")")[0] if "Author: " in parent_text else ""
+            target_reply_id = parent_msg.reply_to_message.message_id if parent_msg.reply_to_message else parent_msg.message_id
+        else:
+            sub_id = parent_text.split("SUBMISSION #")[1].split(":")[0]
+            author_tag = ""
+            target_reply_id = parent_msg.message_id
+
+        # 3. Update DB Credit Points
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE user_critiques SET critique_count = critique_count + 1 WHERE user_id = ?", (user.id,))
+        conn.commit()
+        conn.close()
+
+        # 4. Automatically insert #review and author tag into final card
+        formatted_review_card = (
+            f"📝 **#review for Submission #{sub_id}** {author_tag}\n"
+            f"👤 **Reviewer:** @{user.username if user.username else user.first_name}\n"
+            f"📊 **Word Count:** {word_count} words | **Credit Awarded:** +1 Point\n"
+            f"--------------------------------------------------\n\n"
+            f"{critique_text}"
+        )
+
+        await context.bot.send_message(
+            chat_id=msg.chat_id,
+            message_thread_id=msg.message_thread_id,
+            reply_to_message_id=target_reply_id,
+            text=formatted_review_card,
+            parse_mode="Markdown"
+        )
+
+        # 5. Clean up raw draft messages
+        try:
+            await msg.delete()
+            if "Critique for Submission #" in parent_text:
+                await parent_msg.delete()
+        except Exception:
+            pass
+
+        return
+
     if "Tags Selected:" in parent_text:
         genre = context.user_data.get('submission_genre', 'general')
         post_type = context.user_data.get('submission_type', 'feedback')
@@ -663,24 +724,33 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             content
         )
         
+        # Build submission card with clear #submission tag for scrolling
         formatted_post = (
             f"📖 **SUBMISSION #{sub_id}: {title.upper()}**\n"
             f"✍️ **Author:** @{user.username if user.username else user.first_name}\n"
-            f"🏷️ **Tags:** #{genre} #{post_type}\n"
+            f"🏷️ **Tags:** #{genre} #{post_type} #submission\n"
             f"--------------------------------------------------\n\n"
             f"{content}\n\n"
             f"--------------------------------------------------\n"
-            f"💬 *Reply directly to this post to leave a critique!*"
+            f"💬 *Click 'Leave Critique' below or reply directly to review this work!*"
         )
 
         keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("💬 Leave Critique", callback_data=f"sub_rev_{sub_id}"),
-                InlineKeyboardButton("🔍 View Stack", callback_data=f"sub_stack_{sub_id}")
-            ]
+            [InlineKeyboardButton("💬 Leave Critique", callback_data=f"sub_rev_{sub_id}_{user.username or 'author'}")]
         ])
 
-        # 1. Send formatted card into the topic
+        # 1. Post to Channel (Showcase feed)
+        if 'CHANNEL_ID' in globals() and CHANNEL_ID:
+            try:
+                await context.bot.send_message(
+                    chat_id=CHANNEL_ID,
+                    text=formatted_post,
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                logging.error(f"Failed to post to channel: {e}")
+
+        # 2. Post to Group Topic (Discussion feed)
         await context.bot.send_message(
             chat_id=msg.chat_id,
             message_thread_id=msg.message_thread_id,
@@ -898,15 +968,18 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Submission Cards & Threaded Reviews
     elif data.startswith("sub_rev_"):
-        sub_id = data.replace("sub_rev_", "")
+        parts = data.split("_")
+        sub_id = parts[2]
+        author = parts[3]
         await query.answer()
-        
+
         await context.bot.send_message(
             chat_id=query.message.chat_id,
             message_thread_id=CRITIQUE_TOPIC_ID,
             reply_to_message_id=query.message.message_id,
-            text=f"✍️ **Critique Submission #{sub_id}**\n\n"
-                 f"Please reply directly to this message with your detailed critique.",
+            text=f"✍️ **Critique for Submission #{sub_id} (Author: @{author})**\n\n"
+                 f"Please reply directly to this message with your critique.\n"
+                 f"⚠️ **Requirements:** Must include `#review` and be at least **20 words** to earn credit points.",
             parse_mode="Markdown"
         )
         return
