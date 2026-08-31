@@ -652,12 +652,23 @@ async def enforce_critique_format(update: Update, context: ContextTypes.DEFAULT_
         except Exception as e:
             logging.error(f"Failed to delete message: {e}")
 
-# --- Moderation & Appeal Logic ---
+# Set to track recently processed messages and prevent double-triggering
+PROCESSED_MSG_IDS = set()
+
 async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await enforce_critique_format(update, context)
     msg = update.effective_message
     if not msg or not msg.text:
         return
+
+    # Deduplication Guard: If this exact message ID is already being processed, stop!
+    if msg.message_id in PROCESSED_MSG_IDS:
+        return
+    PROCESSED_MSG_IDS.add(msg.message_id)
+    
+    # Keep the tracking set small so RAM stays low
+    if len(PROCESSED_MSG_IDS) > 200:
+        PROCESSED_MSG_IDS.clear()
 
     user = update.effective_user
     parent_msg = msg.reply_to_message
@@ -753,7 +764,6 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logging.debug(f"Could not delete message {mid}: {e}")
 
-        # CRITICAL: Hard exit so no fallback code can run
         return
 
     # Clear user context data after workflow finishes
@@ -1138,6 +1148,7 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_callbacks))
     
     # Process incoming text messages
+    # GOOD: Only register process_chat ONCE
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_chat))
 
     print("Bot is listening...")
