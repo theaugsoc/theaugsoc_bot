@@ -98,6 +98,7 @@ init_db()
 TOKEN = os.getenv('BOT_TOKEN', '8998221934:AAFNhEC9eVQfULC8ZrAWnPeJ-A-aD5EwIVA')
 CRITIQUE_TOPIC_ID = 8
 PROMPTS_TOPIC_ID = 9  # Update this to your exact "Prompts and Challenges" Topic ID
+CHANNEL_ID = os.getenv('CHANNEL_ID', None)  # Optional: e.g. -1001234567890 or "@your_channel"
 
 USER_TICKET_STATE = {}  # { user_id: {"category": str, "draft_text": str} }
 
@@ -612,6 +613,7 @@ async def enforce_critique_format(update: Update, context: ContextTypes.DEFAULT_
 
 # --- Moderation & Appeal Logic ---
 async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await enforce_critique_format(update, context)
     msg = update.effective_message
     if not msg or not msg.text:
         return
@@ -622,10 +624,6 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     #Debug
     parent = msg.reply_to_message
     p_text = parent.text if parent else None
-    print(f"[DEBUG process] msg_id={msg.message_id} | thread_id={getattr(msg, 'message_thread_id', None)} | parent_text={repr(p_text)}")
-
-    if p_text and "Tags Selected:" in p_text:
-        print("[DEBUG process] Matched Tags Selected condition! Building card...")
 
     # CHECK FOR SUBMISSION REPLIES
     parent_msg = msg.reply_to_message
@@ -666,9 +664,10 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
 
         # 4. Automatically insert #review and author tag into final card
+        reviewer_name = f"@{user.username}" if user.username else user.first_name
         formatted_review_card = (
             f"📝 **#review for Submission #{sub_id}** {author_tag}\n"
-            f"👤 **Reviewer:** @{user.username if user.username else user.first_name}\n"
+            f"👤 **Reviewer:** {reviewer_name}\n"
             f"📊 **Word Count:** {word_count} words | **Credit Awarded:** +1 Point\n"
             f"--------------------------------------------------\n\n"
             f"{critique_text}"
@@ -702,9 +701,12 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         content = "\n".join(lines[1:]) if len(lines) > 1 else title
         
         # Create submission record in Database
+        author_display = f"@{user.username}" if user.username else user.first_name
+
+        # Create submission record in Database
         sub_id = create_submission(
             user.id, 
-            f"@{user.username}" if user.username else user.first_name, 
+            author_display, 
             title, 
             f"#{genre}", 
             f"#{post_type}", 
@@ -714,7 +716,7 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Build submission card with clear #submission tag for scrolling
         formatted_post = (
             f"📖 **SUBMISSION #{sub_id}: {title.upper()}**\n"
-            f"✍️ **Author:** @{user.username if user.username else user.first_name}\n"
+            f"✍️ **Author:** {author_display}\n"
             f"🏷️ **Tags:** #{genre} #{post_type} #submission\n"
             f"--------------------------------------------------\n\n"
             f"{content}\n\n"
@@ -1135,7 +1137,6 @@ def main():
     
     # Process incoming text messages
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_chat))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, enforce_critique_format))
 
     print("Bot is listening...")
     app.run_polling()
