@@ -1374,6 +1374,19 @@ async def update_leaderboard_topic(context: ContextTypes.DEFAULT_TYPE):
     )
     LAST_LEADERBOARD_MSG_ID = sent_msg.message_id
 
+async def track_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Automatically records any new member joining the group into the database."""
+    result = update.effective_chat
+    if not result:
+        return
+        
+    for member in update.message.new_chat_members:
+        if member.is_bot:
+            continue
+        # Automatically syncs/registers them in your PostgreSQL user_critiques table
+        sync_user(member.id, member.username)
+        logging.info(f"Recorded new member: {member.full_name} (@{member.username} | ID: {member.id})")
+        
 def main():
     app = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
 
@@ -1411,6 +1424,9 @@ def main():
 
     # Register Handlers
     app.add_handler(CallbackQueryHandler(handle_callbacks))
+    
+    # Track any new members joining the group
+    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, track_new_members))
     
     # Process incoming text messages
     # GOOD: Only register process_chat ONCE
