@@ -1162,12 +1162,6 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton("🛠️ Work-in-Progress", callback_data="subtag_type_workinprogress"),
             ]
         ])
-        await query.edit_message_text(
-            f"✅ Genre: **#{selected_genre.capitalize()}**\n\nNow select the post type:",
-            reply_markup=type_keyboard,
-            parse_mode="Markdown"
-        )
-        return
         
         # Edit message to show type selection
         sent_message = await query.edit_message_text(
@@ -1176,7 +1170,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
         
-        # Optional: Clean up this intermediate step quickly if they abandon it halfway (e.g., 15 seconds)
+        # Clean up this intermediate step quickly if abandoned halfway (e.g., 15 seconds)
         context.application.create_task(
             auto_delete_prompt(context, sent_message.chat_id, sent_message.message_id, delay=15)
         )
