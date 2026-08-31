@@ -606,9 +606,9 @@ async def cmd_submitwork(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-    # Schedule prompt message to self-destruct after 2 minutes (120 seconds) if ignored
+    # Schedule prompt message to self-destruct after 30 seconds if ignored
     context.application.create_task(
-        auto_delete_prompt(context, sent_msg.chat_id, sent_msg.message_id, delay=120)
+        auto_delete_prompt(context, sent_msg.chat_id, sent_msg.message_id, delay=30)
     )
 
     # Delete the user's trigger message to keep the group clean
