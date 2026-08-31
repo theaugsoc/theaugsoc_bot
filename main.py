@@ -1289,13 +1289,13 @@ async def post_init(application: Application):
         BotCommand("mycredits", "Check your current review credits"),
         BotCommand("submitwork", "Submit work for structured critique"),
         BotCommand("submitresource", "Submit a resource for the Resource Hub"),
+        BotCommand("leaderboard", "View review leaderboard"), # <-- Add this
+        BotCommand("shop", "Spend credits on perks and rewards"), # <-- Add this
         BotCommand("support", "Open a support or report ticket"),
         BotCommand("addprompts", "Admin: Add prompts via text"),
         BotCommand("manageprompts", "Admin: Open prompt queue manager"),
         BotCommand("addcredits", "Admin: Add credits to a user"),
         BotCommand("resetcredits", "Admin: Reset credits for a user"),
-        BotCommand("leaderboard", "View review leaderboard"),
-        BotCommand("shop", "Spend credits on perks and rewards"),
     ]
     await application.bot.set_my_commands(commands)
 
