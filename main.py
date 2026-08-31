@@ -576,9 +576,13 @@ async def cmd_addprompts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     user = update.effective_user
     
-    # Allow if user is in ADMIN_IDS or verified via Telegram chat admin status
-    is_hardcoded_admin = user.id in ADMIN_IDS
-    is_chat_admin = await is_admin(msg.chat_id, user.id, context)
+    # Allow if user is hardcoded in ADMIN_IDS
+    is_hardcoded_admin = user.id in ADMIN_IDS and user.id != 0
+    
+    # Only check group admin status if we are in a group/supergroup chat
+    is_chat_admin = False
+    if msg.chat.type != 'private':
+        is_chat_admin = await is_admin(msg.chat.id, user.id, context)
     
     if not (is_hardcoded_admin or is_chat_admin):
         resp = await msg.reply_text("❌ Admin command only.")
@@ -1333,14 +1337,20 @@ async def post_init(application: Application):
         BotCommand("resetcredits", "Admin: Reset credits for a user"),
     ]
 
-    # Set default/user commands globally
+    # Set default user commands globally for everyone
     await application.bot.set_my_commands(user_commands)
     
-    # Set admin commands specifically for all group administrators scope
-    await application.bot.set_my_commands(
-        admin_commands, 
-        scope=BotCommandScopeAllChatAdministrators()
-    )
+    # Set admin commands for your specific admin user ID so they appear in private DMs
+    for admin_id in ADMIN_IDS:
+        if admin_id != 0:
+            try:
+                from telegram import BotCommandScopeChat
+                await application.bot.set_my_commands(
+                    admin_commands, 
+                    scope=BotCommandScopeChat(chat_id=admin_id)
+                )
+            except Exception:
+                pass
 
 from datetime import datetime
 
