@@ -229,13 +229,13 @@ def split_text_into_chunks(text: str, max_chars: int = 3000) -> list[str]:
     paragraphs = text.split("\n\n")
 
     for para in paragraphs:
-        if len(current_chunk) + len(para) + 2 <= max_chars:
-            current_chunk += (para + "\n\n")
-        else:
-            if current_chunk:
+        # If adding this paragraph exceeds the limit, push current_chunk to list and start new chunk
+        if len(current_chunk) + len(para) + 2 > max_chars:
+            if current_chunk.strip():
                 chunks.append(current_chunk.strip())
                 current_chunk = ""
-            # If a single paragraph is massive, break it by words
+            
+            # If a single paragraph alone is huge, break it word-by-word
             if len(para) > max_chars:
                 words = para.split()
                 for word in words:
@@ -247,6 +247,8 @@ def split_text_into_chunks(text: str, max_chars: int = 3000) -> list[str]:
                 current_chunk += "\n\n"
             else:
                 current_chunk = para + "\n\n"
+        else:
+            current_chunk += (para + "\n\n")
 
     if current_chunk.strip():
         chunks.append(current_chunk.strip())
