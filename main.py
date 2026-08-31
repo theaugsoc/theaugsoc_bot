@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
@@ -264,35 +265,39 @@ def create_submission(user_id: int, author_tag: str, title: str, genre_tag: str,
     return sub_id
     
 def update_submission_msg_id(sub_id: int, msg_id: int):
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('UPDATE submissions SET msg_id = ? WHERE sub_id = ?', (msg_id, sub_id))
+    cursor.execute('UPDATE submissions SET msg_id = %s WHERE sub_id = %s', (msg_id, sub_id))
     conn.commit()
+    cursor.close()
     conn.close()
 
 def add_submission_review(sub_id: int, reviewer_id: int, reviewer_tag: str, review_text: str):
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        'INSERT INTO submission_reviews (sub_id, reviewer_id, reviewer_tag, review_text) VALUES (?, ?, ?, ?)',
+        'INSERT INTO submission_reviews (sub_id, reviewer_id, reviewer_tag, review_text) VALUES (%s, %s, %s, %s)',
         (sub_id, reviewer_id, reviewer_tag, review_text)
     )
     conn.commit()
+    cursor.close()
     conn.close()
 
 def get_submission(sub_id: int):
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT sub_id, user_id, author_tag, title, genre_tag, post_tag, content, msg_id FROM submissions WHERE sub_id = ?', (sub_id,))
+    cursor.execute('SELECT sub_id, user_id, author_tag, title, genre_tag, post_tag, content, msg_id FROM submissions WHERE sub_id = %s', (sub_id,))
     row = cursor.fetchone()
+    cursor.close()
     conn.close()
     return row
 
 def get_submission_reviews(sub_id: int) -> list:
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT reviewer_tag, review_text, created_at FROM submission_reviews WHERE sub_id = ? ORDER BY review_id ASC', (sub_id,))
+    cursor.execute('SELECT reviewer_tag, review_text, created_at FROM submission_reviews WHERE sub_id = %s ORDER BY review_id ASC', (sub_id,))
     rows = cursor.fetchall()
+    cursor.close()
     conn.close()
     return rows
 
@@ -810,7 +815,7 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # CASE B: STANDALONE DRAFT SUBMISSION
-    if not is_real_reply and words > 0 and "Tags Selected:" not in p_text:
+    if not is_real_reply and words > 0 and "Tags Selected:" not in parent_text:
         if words > 1000:
             try:
                 await msg.delete()
