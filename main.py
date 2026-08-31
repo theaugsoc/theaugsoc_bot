@@ -1209,6 +1209,46 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         use_critiques(user.id, 50)
         await query.message.edit_text("👑 **Role Badge Unlocked!** Please contact an admin with your desired custom title.", parse_mode="Markdown")
 
+   elif data.startswith("tck_dismiss_"):
+        parts = data.split("_")
+        if len(parts) >= 4:
+            t_id, target_id = int(parts[2]), int(parts[3])
+            update_ticket_status(t_id, "DISMISSED")
+            await query.edit_message_text(f"{query.message.text}\n\n❌ **DISMISSED:** Ticket closed.", parse_mode="Markdown")
+            try:
+                await context.bot.send_message(chat_id=target_id, text=f"ℹ️ Ticket #{t_id} reviewed and closed by community admins.")
+            except Exception:
+                pass
+
+    # --- Paste the Join Request handlers here ---
+    elif data.startswith("join_approve_"):
+        parts = data.split("_")
+        if len(parts) >= 4:
+            chat_id, target_user_id = int(parts[2]), int(parts[3])
+            try:
+                await context.bot.approve_chat_join_request(chat_id=chat_id, user_id=target_user_id)
+                await query.edit_message_text(f"{query.message.text}\n\n✅ **APPROVED:** User has been admitted to the group.", parse_mode="Markdown")
+                try:
+                    await context.bot.send_message(chat_id=target_user_id, text="🎉 Your request to join The August Society has been approved! Welcome.")
+                except Exception:
+                    pass
+            except Exception as e:
+                await query.answer(f"Failed to approve: {e}", show_alert=True)
+
+    elif data.startswith("join_decline_"):
+        parts = data.split("_")
+        if len(parts) >= 4:
+            chat_id, target_user_id = int(parts[2]), int(parts[3])
+            try:
+                await context.bot.decline_chat_join_request(chat_id=chat_id, user_id=target_user_id)
+                await query.edit_message_text(f"{query.message.text}\n\n❌ **DECLINED:** Request was rejected.", parse_mode="Markdown")
+                try:
+                    await context.bot.send_message(chat_id=target_user_id, text="ℹ️ Your request to join The August Society was declined by moderators.")
+                except Exception:
+                    pass
+            except Exception as e:
+                await query.answer(f"Failed to decline: {e}", show_alert=True)
+    
     # Interactive Queue Manager Callbacks
     if data.startswith("q_view_"):
         cat = data.replace("q_view_", "")
@@ -1507,6 +1547,44 @@ async def send_conditional_prompt(context: ContextTypes.DEFAULT_TYPE):
     )
     mark_prompt_used(prompt_id)
 
+from telegram import ChatJoinRequest
+
+async def handle_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Captures a user's request to join via invite link and notifies admins."""
+    req: ChatJoinRequest = update.chat_join_request
+    user = req.from_user
+    chat = req.chat
+
+    # Automatically sync user to database if needed
+    sync_user(user.id, user.username)
+
+    admin_text = (
+        f"🚪 **NEW JOIN REQUEST**\n\n"
+        f"**User:** {user.full_name} (@{user.username or 'none'} | ID: `{user.id}`)\n"
+        f"**Group:** {chat.title}"
+    )
+    
+    buttons = [
+        [
+            InlineKeyboardButton("✅ Approve", callback_data=f"join_approve_{chat.id}_{user.id}"),
+            InlineKeyboardButton("❌ Decline", callback_data=f"join_decline_{chat.id}_{user.id}")
+        ]
+    ]
+
+    # Send the approval card to all hardcoded admins or post it to an admin channel/chat
+    # Here we send it to your hardcoded ADMIN_IDS
+    for admin_id in ADMIN_IDS:
+        if admin_id != 0:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=admin_text,
+                    reply_markup=InlineKeyboardMarkup(buttons),
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                logging.error(f"Failed to send join request to admin {admin_id}: {e}")
+
 def main():
     app = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
 
@@ -1550,8 +1628,11 @@ def main():
     # Track any new members joining the group
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, track_new_members))
     
+    # Handle incoming join requests from invite links
+    from telegram.ext import ChatJoinRequestHandler
+    app.add_handler(ChatJoinRequestHandler(handle_join_request))
+    
     # Process incoming text messages
-    # GOOD: Only register process_chat ONCE
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_chat))
 
     print("Bot is listening...")
