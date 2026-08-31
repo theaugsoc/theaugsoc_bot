@@ -2,6 +2,19 @@ import os
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
+import http.server
+import socketserver
+import threading
+
+def start_health_check_server():
+    port = int(os.environ.get("PORT", 8080))
+    handler = http.server.SimpleHTTPRequestHandler
+    with socketserver.TCPServer(("", port), handler) as httpd:
+        httpd.serve_forever()
+
+# Start background health server for Render
+threading.Thread(target=start_health_check_server, daemon=True).start()
+
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 def get_db_connection():
