@@ -1527,9 +1527,12 @@ def main():
     # Register Job Queue
     group_chat_id = int(os.getenv("GROUP_CHAT_ID", "-1001234567890"))
     if app.job_queue:
+        from zoneinfo import ZoneInfo
+        from datetime import time
+
         app.job_queue.run_daily(
             send_conditional_prompt,
-            time=datetime.strptime("09:00:00", "%H:%M:%S").time(),
+            time=time(hour=9, minute=0, second=0, tzinfo=ZoneInfo("Asia/Kolkata")),
             chat_id=group_chat_id,
             name="conditional_prompt_job"
         )
