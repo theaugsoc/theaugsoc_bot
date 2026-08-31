@@ -50,6 +50,7 @@ async def auto_delete_messages(bot, chat_id: int, message_ids: list, delay: int 
 TOKEN = os.getenv('BOT_TOKEN', '8998221934:AAEA8SXPZlGrcNexLOTJ86XnpGaZXQIdnL4')
 CRITIQUE_TOPIC_ID = 8
 PROMPTS_TOPIC_ID = 9  # Update this to your exact "Prompts and Challenges" Topic ID
+RESOURCE_HUB_TOPIC_ID = 10  # Update this to your exact Resource Hub Topic ID
 CHANNEL_ID = os.getenv('CHANNEL_ID', "@theaugustsociety")
 
 USER_TICKET_STATE = {}  # { user_id: {"category": str, "draft_text": str} }
@@ -442,7 +443,24 @@ async def cmd_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
         asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 15))
     else:
         await msg.reply_text("🛠️ **The August Society Support Hub**\nPlease select a category:", reply_markup=keyboard, parse_mode="Markdown")
+async def cmd_submitresource(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    user = update.effective_user
+    sync_user(user.id, user.username)
 
+    if msg.chat.type != 'private':
+        bot_user = await context.bot.get_me()
+        resp = await msg.reply_text(f"Please submit resources to me in a private DM: https://t.me/{bot_user.username}?start=submit_resource")
+        asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 15))
+    else:
+        USER_TICKET_STATE[user.id] = {"category": "Resource Submission"}
+        await msg.reply_text(
+            "📚 **Resource Hub Submission**\n\n"
+            "Please reply to this message with the details of the resource you'd like to share (title, link, description, and any tags). "
+            "It will be sent to the moderators for review.",
+            parse_mode="Markdown"
+        )
+        
 async def auto_delete_prompt(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, delay: int = 120):
     """Waits for the specified delay, then deletes the prompt if it still exists."""
     await asyncio.sleep(delay)
@@ -559,6 +577,15 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif arg == "support":
             await cmd_support(update, context)
             return
+        elif arg == "submit_resource":
+            USER_TICKET_STATE[user.id] = {"category": "Resource Submission"}
+            await msg.reply_text(
+                "📚 **Resource Hub Submission**\n\n"
+                "Please reply to this message with the details of the resource you'd like to share (title, link, description, and any tags). "
+                "It will be sent to the moderators for review.",
+                parse_mode="Markdown"
+            )
+            return
 
     resp = await msg.reply_text("Hello! I am The August Society community manager bot. Type /mycredits to check balance or /support for help.")
     if msg.chat.type != 'private':
@@ -614,9 +641,32 @@ async def enforce_critique_format(update: Update, context: ContextTypes.DEFAULT_
 PROCESSED_MSG_IDS = set()
 
 async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await enforce_critique_format(update, context)
     msg = update.effective_message
-    if not msg or not msg.text:
+    if not msg:
+        return
+
+    thread_id = getattr(msg, 'message_thread_id', None)
+
+    # Strictly block non-admin messages in admin-only topics (Resource Hub & Prompts)
+    if thread_id in [RESOURCE_HUB_TOPIC_ID, PROMPTS_TOPIC_ID]:
+        user = update.effective_user
+        if not await is_admin(msg.chat_id, user.id, context):
+            try:
+                await msg.delete()
+                topic_name = "Resource Hub" if thread_id == RESOURCE_HUB_TOPIC_ID else "Prompts and Challenges"
+                warning = await context.bot.send_message(
+                    chat_id=msg.chat_id,
+                    message_thread_id=thread_id,
+                    text=f"⚠️ @{user.username or user.first_name}, direct posts in the **{topic_name}** topic are restricted to administrators."
+                )
+                await asyncio.sleep(10)
+                await warning.delete()
+            except Exception as e:
+                logging.error(f"Failed to police admin-only topic: {e}")
+            return
+
+    await enforce_critique_format(update, context)
+    if not msg.text:
         return
 
     # Deduplication Guard: If this exact message ID is already being processed, stop!
@@ -770,13 +820,35 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text(f"📄 **File Processed ({doc.file_name})**\nAdded: **{added}** | Duplicates Skipped: **{skipped}**", parse_mode="Markdown")
             return
 
-    # Direct Message Reason Handler for Appeals
+    # Direct Message Reason Handler for Appeals & Resource Submissions
     if update.effective_chat.type == 'private' and user.id in USER_TICKET_STATE:
         state = USER_TICKET_STATE.pop(user.id)
         category = state.get("category", "General Request")
         details = msg.text or "No text provided."
+
+        if category == "Resource Submission":
+            t_id = create_ticket(user.id, category, details)
+            admin_text = (
+                f"📦 **NEW RESOURCE SUBMISSION #{t_id}**\n"
+                f"**Submitted By:** {user.full_name} (@{user.username} | ID: `{user.id}`)\n\n"
+                f"**Content:**\n{details}"
+            )
+            buttons = [
+                [
+                    InlineKeyboardButton("✅ Approve & Post", callback_data=f"res_approve_{t_id}_{user.id}"),
+                    InlineKeyboardButton("❌ Reject", callback_data=f"res_reject_{t_id}_{user.id}")
+                ]
+            ]
+            await context.bot.send_message(
+                chat_id=msg.chat_id,
+                text=admin_text,
+                reply_markup=InlineKeyboardMarkup(buttons),
+                parse_mode="Markdown"
+            )
+            await msg.reply_text("✅ Your resource has been submitted to the moderators for review. You'll be notified when it's posted!")
+            return
+
         draft = state.get("draft_text", "")
-        
         full_details = f"{details}\n\n[Captured Draft: {draft}]" if draft else details
         t_id = create_ticket(user.id, category, full_details)
 
@@ -1033,6 +1105,45 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(chat_id=target_id, text=f"ℹ️ Ticket #{t_id} reviewed and closed by community admins.")
             except Exception:
                 pass
+    elif data.startswith("res_approve_"):
+        parts = data.split("_")
+        if len(parts) >= 4:
+            t_id, target_id = int(parts[2]), int(parts[3])
+            original_text = query.message.text
+            content_part = original_text.split("**Content:**\n")[-1] if "**Content:**\n" in original_text else original_text
+
+            formatted_resource = (
+                f"🌟 **COMMUNITY RESOURCE HUB**\n\n"
+                f"{content_part}\n\n"
+                f"--- \n"
+                f"💡 *Submitted by a community member and verified by mods.*"
+            )
+            
+            group_chat_id = int(os.getenv("GROUP_CHAT_ID", "-1001234567890"))
+            await context.bot.send_message(
+                chat_id=group_chat_id,
+                message_thread_id=RESOURCE_HUB_TOPIC_ID,
+                text=formatted_resource,
+                parse_mode="Markdown"
+            )
+            
+            update_ticket_status(t_id, "RESOLVED_APPROVED")
+            await query.edit_message_text(f"{query.message.text}\n\n✅ **APPROVED & POSTED** to the Resource Hub.", parse_mode="Markdown")
+            try:
+                await context.bot.send_message(chat_id=target_id, text=f"🎉 Your resource submission (#{t_id}) has been approved and published to the Resource Hub!")
+            except Exception:
+                pass
+
+    elif data.startswith("res_reject_"):
+        parts = data.split("_")
+        if len(parts) >= 4:
+            t_id, target_id = int(parts[2]), int(parts[3])
+            update_ticket_status(t_id, "REJECTED")
+            await query.edit_message_text(f"{query.message.text}\n\n❌ **REJECTED**", parse_mode="Markdown")
+            try:
+                await context.bot.send_message(chat_id=target_id, text=f"ℹ️ Your resource submission (#{t_id}) was reviewed and declined by moderators.")
+            except Exception:
+                pass
 
 async def send_scheduled_prompt(context: ContextTypes.DEFAULT_TYPE):
     prompt_data = get_next_prompt_to_dispatch()
@@ -1066,6 +1177,7 @@ async def post_init(application: Application):
         BotCommand("start", "Start the bot and view main menu"),
         BotCommand("mycredits", "Check your current review credits"),
         BotCommand("submitwork", "Submit work for structured critique"),
+        BotCommand("submitresource", "Submit a resource for the Resource Hub"),
         BotCommand("support", "Open a support or report ticket"),
         BotCommand("addprompts", "Admin: Add prompts via text"),
         BotCommand("manageprompts", "Admin: Open prompt queue manager"),
@@ -1087,6 +1199,7 @@ def main():
     app.add_handler(CommandHandler("addprompts", cmd_addprompts))
     app.add_handler(CommandHandler("manageprompts", cmd_manageprompts))
     app.add_handler(CommandHandler("submitwork", cmd_submitwork))
+    app.add_handler(CommandHandler("submitresource", cmd_submitresource))
 
     # Register Job Queue
     group_chat_id = int(os.getenv("GROUP_CHAT_ID", "-1001234567890"))
