@@ -53,6 +53,7 @@ PROMPTS_TOPIC_ID = 9  # Update this to your exact "Prompts and Challenges" Topic
 RESOURCE_HUB_TOPIC_ID = 10  # Update this to your exact Resource Hub Topic ID
 CHANNEL_ID = os.getenv('CHANNEL_ID', "@theaugustsociety")
 LEADERBOARD_TOPIC_ID = 485  # Update with your dedicated Leaderboard Topic ID
+LAST_LEADERBOARD_MSG_ID = None
 
 USER_TICKET_STATE = {}  # { user_id: {"category": str, "draft_text": str} }
 
@@ -692,6 +693,16 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     thread_id = getattr(msg, 'message_thread_id', None)
 
+    # Auto-delete non-admin messages in the Leaderboard topic
+    if msg.chat.type in ['supergroup', 'group'] and thread_id == LEADERBOARD_TOPIC_ID:
+        user = update.effective_user
+        if not await is_admin(msg.chat_id, user.id, context):
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+            return
+
     # Strictly block non-admin messages in admin-only topics (Resource Hub & Prompts)
     if thread_id in [RESOURCE_HUB_TOPIC_ID, PROMPTS_TOPIC_ID]:
         user = update.effective_user
@@ -1299,21 +1310,44 @@ async def post_init(application: Application):
     ]
     await application.bot.set_my_commands(commands)
 
+from datetime import datetime
+
 async def update_leaderboard_topic(context: ContextTypes.DEFAULT_TYPE):
+    global LAST_LEADERBOARD_MSG_ID
     chat_id = context.job.chat_id
     top_users = get_top_users(10)
     
-    text = "🏆 **Daily Community Review Leaderboard** 🏆\n\n"
+    current_time = datetime.now().strftime("%B %d, %Y at %H:%M")
+    
+    text = (
+        f"🏆 **Daily Community Review Leaderboard** 🏆\n"
+        f"📅 *Updated on: {current_time}*\n\n"
+    )
+    
     for idx, (uname, count) in enumerate(top_users, 1):
         display_name = uname or f"User #{idx}"
         text += f"{idx}. {display_name} — **{count} credits**\n"
         
-    await context.bot.send_message(
+    text += (
+        "\n--- \n"
+        "💡 Use `/leaderboard` for latest scores and `/mycredits` for your current score."
+    )
+    
+    # Delete the previous leaderboard post if it exists
+    if LAST_LEADERBOARD_MSG_ID:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=LAST_LEADERBOARD_MSG_ID)
+        except Exception:
+            pass
+            
+    # Send the new leaderboard post and store its ID
+    sent_msg = await context.bot.send_message(
         chat_id=chat_id,
         message_thread_id=LEADERBOARD_TOPIC_ID,
         text=text,
         parse_mode="Markdown"
     )
+    LAST_LEADERBOARD_MSG_ID = sent_msg.message_id
 
 def main():
     app = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
