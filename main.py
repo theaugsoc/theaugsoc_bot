@@ -811,6 +811,10 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parent_msg = msg.reply_to_message
     parent_text = parent_msg.text if parent_msg and parent_msg.text else ""
 
+
+    # ==========================================
+    # WORKFLOW SUBMISSION (Tags Selected)
+    # ==========================================
     # ==========================================
     # WORKFLOW SUBMISSION (Tags Selected)
     # ==========================================
@@ -854,18 +858,18 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Send all parts under the SAME submission ID
         for i, chunk in enumerate(chunks, 1):
-            part_suffix = f" **({i}/{total_parts})**" if total_parts > 1 else ""
+            part_suffix = f" ({i}/{total_parts})" if total_parts > 1 else ""
             
             header = (
-                f"📖 **SUBMISSION #{sub_id}: {title.upper()}**{part_suffix}\n"
-                f"✍️ **Author:** {author_display}\n"
-                f"🏷️ **Tags:** #{genre} #{post_type} #submission {author_hashtag}\n"
+                f"📖 SUBMISSION #{sub_id}: {title.upper()}{part_suffix}\n"
+                f"✍️ Author: {author_display}\n"
+                f"🏷️ Tags: #{genre} #{post_type} #submission {author_hashtag}\n"
                 f"--------------------------------------------------\n\n"
             )
             
             footer = (
                 f"\n\n--------------------------------------------------\n"
-                f"💬 *Click 'Leave Critique' below or reply directly to review this work!*" 
+                f"💬 Click 'Leave Critique' below or reply directly to review this work!" 
                 if i == total_parts else ""
             )
 
@@ -877,7 +881,7 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await context.bot.send_message(
                         chat_id=CHANNEL_ID,
                         text=formatted_post,
-                        parse_mode="Markdown"
+                        parse_mode=None
                     )
                 except Exception as e:
                     logging.error(f"Failed to post to channel: {e}")
@@ -887,7 +891,7 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 message_thread_id=msg.message_thread_id,
                 text=formatted_post,
                 reply_markup=reply_markup,
-                parse_mode="Markdown"
+                parse_mode=None
             )
 
         # Delete setup menu & raw user draft
@@ -1170,14 +1174,18 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['submission_type'] = selected_type  
         genre = context.user_data.get('submission_genre', 'general')
         
+        # Set a flag telling your message handler the next text input is the pen name
+        context.user_data['waiting_for_pen_name'] = True
+        
         sent_message = await query.edit_message_text(
             f"✅ **Tags Selected:** #{genre} #{selected_type}\n\n"
-            f"Please reply to this message with your piece's title and full text to post!",
+            f"Please reply with your **Pen Name** (can be multiple words, e.g., *John Doe*):",
             reply_markup=None,
             parse_mode="Markdown"
         )
+
+        # 5 minute delay to let user type out or paste their writing with plenty time
         
-        # Give the user plenty of time to type and reply (e.g., 300 seconds / 5 minutes)
         context.application.create_task(
             auto_delete_prompt(context, sent_message.chat_id, sent_message.message_id, delay=300)
         )
@@ -1251,6 +1259,34 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(chat_id=target_id, text=f"ℹ️ Ticket #{t_id} reviewed and closed by community admins.")
             except Exception:
                 pass
+
+    elif data.startswith("join_approve_"):
+        parts = data.split("_")
+        if len(parts) >= 4:
+            chat_id, target_user_id = int(parts[2]), int(parts[3])
+            try:
+                await context.bot.approve_chat_join_request(chat_id=chat_id, user_id=target_user_id)
+                await query.edit_message_text(f"{query.message.text}\n\n✅ **APPROVED:** User has been admitted to the group.", parse_mode="Markdown")
+                try:
+                    await context.bot.send_message(chat_id=target_user_id, text="🎉 Your request to join The August Society has been approved! Welcome.")
+                except Exception:
+                    pass
+            except Exception as e:
+                await query.answer(f"Failed to approve: {e}", show_alert=True)
+
+    elif data.startswith("join_decline_"):
+        parts = data.split("_")
+        if len(parts) >= 4:
+            chat_id, target_user_id = int(parts[2]), int(parts[3])
+            try:
+                await context.bot.decline_chat_join_request(chat_id=chat_id, user_id=target_user_id)
+                await query.edit_message_text(f"{query.message.text}\n\n❌ **DECLINED:** Request was rejected.", parse_mode="Markdown")
+                try:
+                    await context.bot.send_message(chat_id=target_user_id, text="ℹ️ Your request to join The August Society was declined by moderators.")
+                except Exception:
+                    pass
+            except Exception as e:
+                await query.answer(f"Failed to decline: {e}", show_alert=True)
                 
     # --- Paste the Join Request handlers here ---
     elif data.startswith("join_approve_"):
