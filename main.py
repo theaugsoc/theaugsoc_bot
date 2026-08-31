@@ -178,7 +178,7 @@ def mark_prompt_used(prompt_id: int):
 
 # --- SUBMISSION & REVIEW HELPERS ---
 ALLOWED_GENRE_TAGS = {'#poetry', '#fiction', '#nonfiction', '#prose', '#essay'}
-ALLOWED_POST_TAGS = {'#critique', '#submission', '#feedback', '#wip'}
+ALLOWED_POST_TAGS = {'#draft', '#submission', '#workinprogress', '#wip'}
 
 def split_text_into_chunks(text: str, max_chars: int = 2500) -> list[str]:
     """Safely splits long text into sequential chunks without dropping paragraphs or words."""
@@ -740,7 +740,7 @@ async def enforce_critique_format(update: Update, context: ContextTypes.DEFAULT_
         return
 
     has_genre = any(tag in text.lower() for tag in ['#fiction', '#poetry', '#nonfiction', '#prose'])
-    has_type = any(tag in text.lower() for tag in ['#critique', '#feedback', '#review'])
+    has_type = any(tag in text.lower() for tag in ['#draft', '#workinprogress', '#review'])
 
     if not (has_genre and has_type):
         try:
@@ -1128,8 +1128,8 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         type_keyboard = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("🔍 Detailed Critique", callback_data="subtag_type_critique"),
-                InlineKeyboardButton("💬 General Feedback", callback_data="subtag_type_feedback"),
+                InlineKeyboardButton("📄 Draft", callback_data="subtag_type_draft"),
+                InlineKeyboardButton("🛠️ Work-in-Progress", callback_data="subtag_type_workinprogress"),
             ]
         ])
         await query.edit_message_text(
