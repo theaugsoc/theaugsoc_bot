@@ -49,8 +49,7 @@ async def auto_delete_messages(bot, chat_id: int, message_ids: list, delay: int 
 TOKEN = os.getenv('BOT_TOKEN', '8998221934:AAEA8SXPZlGrcNexLOTJ86XnpGaZXQIdnL4')
 CRITIQUE_TOPIC_ID = 8
 PROMPTS_TOPIC_ID = 9  # Update this to your exact "Prompts and Challenges" Topic ID
-CHANNEL_ID = os.getenv('CHANNEL_ID', None)  # Optional: e.g. -1001234567890 or "@your_channel"
-CHANNEL_HANDLE = "@theaugustsociety"
+CHANNEL_ID = os.getenv('CHANNEL_ID', "@theaugustsociety")
 
 USER_TICKET_STATE = {}  # { user_id: {"category": str, "draft_text": str} }
 
@@ -661,7 +660,7 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             formatted_post = f"{header}{chunk}{footer}"
             reply_markup = keyboard if i == total_parts else None
 
-            if 'CHANNEL_ID' in globals() and CHANNEL_ID:
+            if CHANNEL_ID:
                 try:
                     await context.bot.send_message(
                         chat_id=CHANNEL_ID,
