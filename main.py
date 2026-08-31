@@ -1295,7 +1295,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await cmd_manageprompts(update, context)
         return
 
-    if data.startswith("hub_cat_"):
+    elif data.startswith("hub_cat_"):
         cat_map = {
             "hub_cat_appeal": "Post Appeal",
             "hub_cat_credits": "Credit Dispute",
@@ -1318,8 +1318,8 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
 
-    elif data.startswith("tck_dismiss_"):
-        parts = data.split("_")
+    elif data.startswith("tck_dismiss_"):   # <-- Check alignment of this line
+        parts = data.split("_")             # <-- Check alignment of this block (8 spaces)
         if len(parts) >= 4:
             t_id, target_id = int(parts[2]), int(parts[3])
             update_ticket_status(t_id, "DISMISSED")
