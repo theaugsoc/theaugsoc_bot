@@ -1149,6 +1149,11 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Please reply to this message with your piece's title and full text to post!",
             parse_mode="Markdown"
         )
+        
+        # Schedule this final instruction message to self-destruct after 150 seconds if ignored
+        context.application.create_task(
+            auto_delete_prompt(context, query.message.chat_id, query.message.message_id, delay=150)
+        )
         return
 
     # Submission Cards & Threaded Reviews
