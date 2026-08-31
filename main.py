@@ -443,6 +443,7 @@ async def cmd_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
         asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 15))
     else:
         await msg.reply_text("🛠️ **The August Society Support Hub**\nPlease select a category:", reply_markup=keyboard, parse_mode="Markdown")
+
 async def cmd_submitresource(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     user = update.effective_user
@@ -453,11 +454,15 @@ async def cmd_submitresource(update: Update, context: ContextTypes.DEFAULT_TYPE)
         resp = await msg.reply_text(f"Please submit resources to me in a private DM: https://t.me/{bot_user.username}?start=submit_resource")
         asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 15))
     else:
-        USER_TICKET_STATE[user.id] = {"category": "Resource Submission"}
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Poetry", callback_data="res_tag_poetry"),
+             InlineKeyboardButton("Fiction", callback_data="res_tag_fiction"),
+             InlineKeyboardButton("Non-Fiction", callback_data="res_tag_nonfiction")]
+        ])
         await msg.reply_text(
             "📚 **Resource Hub Submission**\n\n"
-            "Please reply to this message with the details of the resource you'd like to share (title, link, description, and any tags). "
-            "It will be sent to the moderators for review.",
+            "First, please select the mandatory category for your resource:",
+            reply_markup=keyboard,
             parse_mode="Markdown"
         )
         
@@ -827,11 +832,24 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         details = msg.text or "No text provided."
 
         if category == "Resource Submission":
-            t_id = create_ticket(user.id, category, details)
+            mandatory_tag = state.get("mandatory_tag", "#fiction")
+            
+            # Capture caption/text or file attachment info
+            caption = msg.caption or msg.text or "No description provided."
+            file_info = ""
+            
+            if msg.document:
+                file_info = f"\n📎 **Attached Document:** `{msg.document.file_name}`"
+            elif msg.photo:
+                file_info = "\n🖼️ **Attached Image**"
+            
+            full_content = f"**Category:** {mandatory_tag}\n{caption}{file_info}"
+            t_id = create_ticket(user.id, category, full_content)
+
             admin_text = (
                 f"📦 **NEW RESOURCE SUBMISSION #{t_id}**\n"
                 f"**Submitted By:** {user.full_name} (@{user.username} | ID: `{user.id}`)\n\n"
-                f"**Content:**\n{details}"
+                f"{full_content}"
             )
             buttons = [
                 [
@@ -839,12 +857,13 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     InlineKeyboardButton("❌ Reject", callback_data=f"res_reject_{t_id}_{user.id}")
                 ]
             ]
-            await context.bot.send_message(
-                chat_id=msg.chat_id,
-                text=admin_text,
-                reply_markup=InlineKeyboardMarkup(buttons),
-                parse_mode="Markdown"
-            )
+            
+            # If a file/photo was sent, forward it to admin review along with markup
+            if msg.document or msg.photo:
+                await context.bot.send_message(chat_id=msg.chat_id, text=admin_text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+            else:
+                await context.bot.send_message(chat_id=msg.chat_id, text=admin_text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+                
             await msg.reply_text("✅ Your resource has been submitted to the moderators for review. You'll be notified when it's posted!")
             return
 
@@ -1105,18 +1124,35 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(chat_id=target_id, text=f"ℹ️ Ticket #{t_id} reviewed and closed by community admins.")
             except Exception:
                 pass
+
+    elif data.startswith("res_tag_"):
+        tag = data.split("_")[-1]
+        mandatory_tag = f"#{tag}"
+        USER_TICKET_STATE[user.id] = {
+            "category": "Resource Submission",
+            "mandatory_tag": mandatory_tag
+        }
+        await query.message.edit_text(
+            f"✅ Selected category: **{mandatory_tag}**\n\n"
+            "Now, please upload your file (`.pdf`, `.txt`, `.docx`, `.pptx`, `.xlsx`, `.md`, images) or send a weblink along with a description and any additional tags (e.g., `#academic`, `#research`, `#writingguide`, `#toolkit`, `#history`, etc.).",
+            parse_mode="Markdown"
+        )
+        return
+    
     elif data.startswith("res_approve_"):
         parts = data.split("_")
         if len(parts) >= 4:
             t_id, target_id = int(parts[2]), int(parts[3])
             original_text = query.message.text
-            content_part = original_text.split("**Content:**\n")[-1] if "**Content:**\n" in original_text else original_text
+            
+            # Extract content payload from admin ticket message
+            content_part = original_text.split("**NEW RESOURCE SUBMISSION**")[-1].split("---")[0] if "**NEW RESOURCE SUBMISSION**" in original_text else original_text
 
             formatted_resource = (
                 f"🌟 **COMMUNITY RESOURCE HUB**\n\n"
                 f"{content_part}\n\n"
                 f"--- \n"
-                f"💡 *Submitted by a community member and verified by mods.*"
+                f"💡 *Verified Resource Hub Submission*"
             )
             
             group_chat_id = int(os.getenv("GROUP_CHAT_ID", "-1001234567890"))
