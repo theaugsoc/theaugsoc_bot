@@ -575,7 +575,12 @@ async def cmd_submitwork(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_addprompts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     user = update.effective_user
-    if not await is_admin(msg.chat_id, user.id, context):
+    
+    # Allow if user is in ADMIN_IDS or verified via Telegram chat admin status
+    is_hardcoded_admin = user.id in ADMIN_IDS
+    is_chat_admin = await is_admin(msg.chat_id, user.id, context)
+    
+    if not (is_hardcoded_admin or is_chat_admin):
         resp = await msg.reply_text("❌ Admin command only.")
         asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 10))
         return
