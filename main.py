@@ -259,10 +259,13 @@ def update_ticket_status(ticket_id: int, status: str):
     conn.close()
 
 def sync_user(user_id: int, username: str):
-    conn = get_db_connection()
-    cursor = conn.cursor()
     try:
+        # Replace 'bot_database.db' with your actual .db file name if different
+        conn = sqlite3.connect('critiques.db') 
+        cursor = conn.cursor()
+        
         clean_username = f"@{username}" if username else "Anonymous"
+        
         cursor.execute("SELECT user_id FROM user_critiques WHERE user_id = ?", (user_id,))
         row = cursor.fetchone()
         
@@ -272,10 +275,9 @@ def sync_user(user_id: int, username: str):
             cursor.execute("INSERT INTO user_critiques (user_id, username, critique_count) VALUES (?, ?, 0)", (user_id, clean_username))
             
         conn.commit()
+        conn.close()
     except Exception as e:
         logging.error(f"Error in sync_user: {e}")
-    finally:
-        conn.close()
 
 def get_critiques(user_id: int) -> int:
     conn = sqlite3.connect('critiques.db')
