@@ -557,6 +557,12 @@ async def enforce_critique_format(update: Update, context: ContextTypes.DEFAULT_
     if not msg or getattr(msg, 'message_thread_id', None) != CRITIQUE_TOPIC_ID:
         return
 
+    user = update.effective_user
+    
+    # Bypass all format enforcement and auto-deletion for group admins/creators
+    if await is_admin(msg.chat_id, user.id, context):
+        return
+
     parent_msg = msg.reply_to_message
     parent_text = parent_msg.text if parent_msg and parent_msg.text else ""
 
