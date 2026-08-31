@@ -50,6 +50,7 @@ TOKEN = os.getenv('BOT_TOKEN', '8998221934:AAEA8SXPZlGrcNexLOTJ86XnpGaZXQIdnL4')
 CRITIQUE_TOPIC_ID = 8
 PROMPTS_TOPIC_ID = 9  # Update this to your exact "Prompts and Challenges" Topic ID
 CHANNEL_ID = os.getenv('CHANNEL_ID', None)  # Optional: e.g. -1001234567890 or "@your_channel"
+CHANNEL_HANDLE = "@theaugustsociety"
 
 USER_TICKET_STATE = {}  # { user_id: {"category": str, "draft_text": str} }
 
@@ -470,6 +471,12 @@ async def cmd_submitwork(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=keyboard,
         parse_mode="Markdown"
     )
+
+    # Delete the user's trigger message to keep the group clean
+    try:
+        await msg.delete()
+    except Exception as e:
+        logging.error(f"Failed to delete submitwork trigger message: {e}")
 
 
 async def cmd_addprompts(update: Update, context: ContextTypes.DEFAULT_TYPE):
