@@ -25,83 +25,16 @@ async def auto_delete_messages(bot, chat_id: int, message_ids: list, delay: int 
         except Exception as e:
             logging.debug(f"Auto-delete failed for message {msg_id}: {e}")
 
+# --- Consolidated Database Initialization ---
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=10, check_same_thread=False)
     cursor = conn.cursor()
     
-    # 1. Create user_critiques table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS user_critiques (
             user_id INTEGER PRIMARY KEY,
             username TEXT,
             critique_count INTEGER DEFAULT 0
-        )
-    ''')
-    
-    # 2. Create submissions table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS submissions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            author_tag TEXT,
-            title TEXT,
-            genre_tag TEXT,
-            post_tag TEXT,
-            content TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    # 3. Add missing author_tag column safely if table already exists without it
-    try:
-        cursor.execute("ALTER TABLE submissions ADD COLUMN author_tag TEXT")
-    except sqlite3.OperationalError:
-        pass  # Column already exists
-
-    conn.commit()
-    conn.close()
-
-# Run DB initialization immediately on startup
-init_db()
-
-TOKEN = os.getenv('BOT_TOKEN', '8998221934:AAFNhEC9eVQfULC8ZrAWnPeJ-A-aD5EwIVA')
-CRITIQUE_TOPIC_ID = 8
-PROMPTS_TOPIC_ID = 9  # Update this to your exact "Prompts and Challenges" Topic ID
-
-USER_TICKET_STATE = {}  # { user_id: {"category": str, "draft_text": str} }
-
-
-def run_flask():
-    log = logging.getLogger('werkzeug')
-    log.setLevel(logging.ERROR)  # Suppresses standard HTTP request logs
-    port = int(os.environ.get("PORT", 8080))
-    app_flask.run(host='0.0.0.0', port=port)
-# --- Flask Keep-Alive Server ---
-app_flask = Flask('')
-
-@app_flask.route('/')
-def home():
-    return "The Aug Soc Bot is awake and running!"
-
-def run_flask():
-    port = int(os.environ.get("PORT", 8080))
-    app_flask.run(host='0.0.0.0', port=port)
-
-def keep_alive():
-    t = Thread(target=run_flask)
-    t.daemon = True
-    t.start()
-
-# --- Database Functions ---
-def init_db():
-    conn = sqlite3.connect('critiques.db', timeout=10, check_same_thread=False)
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            username TEXT,
-            credits INTEGER DEFAULT 3
         )
     ''')
     cursor.execute('''
@@ -117,32 +50,75 @@ def init_db():
     ''')
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS prompts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            prompt_id INTEGER PRIMARY KEY AUTOINCREMENT,
             category TEXT,
             challenge_type TEXT,
             prompt_text TEXT,
+            priority INTEGER DEFAULT 0,
             is_used INTEGER DEFAULT 0
         )
     ''')
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS submissions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sub_id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
+            author_tag TEXT,
             title TEXT,
-            link TEXT,
+            genre_tag TEXT,
+            post_tag TEXT,
+            content TEXT,
+            msg_id INTEGER,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS submission_reviews (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            submission_id INTEGER,
+            review_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sub_id INTEGER,
             reviewer_id INTEGER,
+            reviewer_tag TEXT,
             review_text TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS review_logs (
+            user_id INTEGER,
+            target_msg_id INTEGER,
+            PRIMARY KEY (user_id, target_msg_id)
+        )
+    ''')
+
+    conn.commit()
+    conn.close()
+
+init_db()
+
+TOKEN = os.getenv('BOT_TOKEN', '8998221934:AAFNhEC9eVQfULC8ZrAWnPeJ-A-aD5EwIVA')
+CRITIQUE_TOPIC_ID = 8
+PROMPTS_TOPIC_ID = 9  # Update this to your exact "Prompts and Challenges" Topic ID
+
+USER_TICKET_STATE = {}  # { user_id: {"category": str, "draft_text": str} }
+
+
+# --- Flask Keep-Alive Server ---
+app_flask = Flask('')
+
+@app_flask.route('/')
+def home():
+    return "The Aug Soc Bot is awake and running!"
+
+def run_flask():
+    log = logging.getLogger('werkzeug')
+    log.setLevel(logging.ERROR)
+    port = int(os.environ.get("PORT", 8080))
+    app_flask.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Thread(target=run_flask)
+    t.daemon = True
+    t.start()
+
     # Pre-load initial prompts if queue is empty
     cursor.execute('SELECT COUNT(*) FROM prompts')
     if cursor.fetchone()[0] == 0:
@@ -495,6 +471,7 @@ async def cmd_resetcredits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 15))
 
 async def cmd_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
     user = update.effective_user
     sync_user(user.id, user.username)
     
@@ -505,17 +482,30 @@ async def cmd_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("❓ General Help", callback_data="hub_cat_other")]
     ])
     
-    if update.effective_chat.type != 'private':
+    if msg.chat.type != 'private':
         bot_user = await context.bot.get_me()
-        await update.message.reply_text(f"Please reach out to me in private DM: https://t.me/{bot_user.username}?start=support")
+        resp = await msg.reply_text(f"Please reach out to me in private DM: https://t.me/{bot_user.username}?start=support")
+        asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 15))
     else:
-        await update.message.reply_text("🛠️ **The Aug Society Support Hub**\nPlease select a category:", reply_markup=keyboard, parse_mode="Markdown")
+        await msg.reply_text("🛠️ **The Aug Society Support Hub**\nPlease select a category:", reply_markup=keyboard, parse_mode="Markdown")
+
 
 async def cmd_submitwork(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
-    
-    # Interactive buttons for selecting genre
-    keyboard = [
+    user = update.effective_user
+    sync_user(user.id, user.username)
+
+    credits = get_critiques(user.id)
+    if credits < 1:
+        resp = await msg.reply_text(
+            f"⚠️ **Insufficient Credits:** You currently have **{credits}** credits.\n"
+            f"Please leave a critique on another submission (minimum 20 words) to earn credits before submitting.",
+            parse_mode="Markdown"
+        )
+        asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 15))
+        return
+
+    keyboard = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("📖 Fiction", callback_data="subtag_genre_fiction"),
             InlineKeyboardButton("✍️ Poetry", callback_data="subtag_genre_poetry"),
@@ -524,79 +514,33 @@ async def cmd_submitwork(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("📝 Non-Fiction", callback_data="subtag_genre_nonfiction"),
             InlineKeyboardButton("🎭 Script/Other", callback_data="subtag_genre_other"),
         ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await msg.reply_text(
-        "🚀 **Submit Work for Critique**\n\n"
-        "Select the primary genre for your submission to begin:",
-        reply_markup=reply_markup,
-        parse_mode="Markdown"
-    )
-    return
-
-    title = lines[0]
-    tag_line = lines[1]
-    content = "\n".join(lines[2:]) if len(lines) > 2 else title
-
-    is_valid, genre_tag, post_tag = parse_and_validate_hashtags(tag_line)
-    if not is_valid:
-        await msg.reply_text(
-            "❌ **Missing Required Hashtags!**\n\n"
-            "Your submission must include at least one **Genre** tag (`#poetry`, `#fiction`, `#nonfiction`) "
-            "and one **Post Type** tag (`#critique`, `#submission`, `#feedback`).",
-            parse_mode="Markdown"
-        )
-        return
-
-    sub_id = create_submission(user.id, f"@{user.username}" if user.username else user.first_name, title, genre_tag, post_tag, content)
-    
-    preview = content[:300] + ("..." if len(content) > 300 else "")
-    card_text = (
-        f"📖 **SUBMISSION #{sub_id}: {title.upper()}**\n"
-        f"✍️ Author: @{user.username if user.username else user.first_name} | Tags: {genre_tag} {post_tag}\n"
-        f"--------------------------------------------------\n"
-        f"{preview}\n"
-        f"--------------------------------------------------\n"
-        f"📊 Critiques Received: 0"
-    )
-
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("💬 Leave Critique", callback_data=f"sub_rev_{sub_id}"),
-            InlineKeyboardButton("🔍 View Stack (0)", callback_data=f"sub_stack_{sub_id}")
-        ]
     ])
 
-    await context.bot.send_message(
-        chat_id=msg.chat_id,
-        message_thread_id=CRITIQUE_TOPIC_ID,
-        text=card_text,
+    await msg.reply_text(
+        f"🚀 **Submit Work for Critique (Available Credits: {credits})**\n\n"
+        "Select the primary genre for your submission to begin:",
         reply_markup=keyboard,
         parse_mode="Markdown"
     )
 
-    if msg.chat.type != 'private':
-        try:
-            await msg.delete()
-        except Exception:
-            pass
 
 async def cmd_addprompts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     user = update.effective_user
     if not await is_admin(msg.chat_id, user.id, context):
-        await msg.reply_text("❌ Admin command only.")
+        resp = await msg.reply_text("❌ Admin command only.")
+        asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 10))
         return
 
     parts = msg.text.split(maxsplit=1)
     raw_text = parts[1].strip() if len(parts) > 1 else ""
     if not raw_text:
-        await msg.reply_text(
+        resp = await msg.reply_text(
             "Usage:\n`/addprompts\ncategory | challenge_type | prompt text`\n\n"
             "Example:\n`poetry | weekly | Write a sonnet about dusk.`", 
             parse_mode="Markdown"
         )
+        asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 15))
         return
 
     entries = []
@@ -607,13 +551,16 @@ async def cmd_addprompts(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 entries.append(parts)
 
     added, skipped = bulk_insert_prompts(entries)
-    await msg.reply_text(f"✅ **Ingestion Complete**\nAdded: **{added}** | Duplicates Skipped: **{skipped}**", parse_mode="Markdown")
+    resp = await msg.reply_text(f"✅ **Ingestion Complete**\nAdded: **{added}** | Duplicates Skipped: **{skipped}**", parse_mode="Markdown")
+    asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 15))
+
 
 async def cmd_manageprompts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     user = update.effective_user
     if not await is_admin(msg.chat_id, user.id, context):
-        await msg.reply_text("❌ Admin command only.")
+        resp = await msg.reply_text("❌ Admin command only.")
+        asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 10))
         return
 
     keyboard = InlineKeyboardMarkup([
@@ -621,9 +568,31 @@ async def cmd_manageprompts(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📖 Fiction Queue", callback_data="q_view_fiction")],
         [InlineKeyboardButton("📝 Non-Fiction Queue", callback_data="q_view_non-fiction")]
     ])
-    await msg.reply_text("🗂️ **Prompt Queue Manager**\nSelect a genre category to inspect or rearrange:", reply_markup=keyboard, parse_mode="Markdown")
+    resp = await msg.reply_text("🗂️ **Prompt Queue Manager**\nSelect a genre category to inspect or rearrange:", reply_markup=keyboard, parse_mode="Markdown")
+    asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 20))
+
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
+    user = update.effective_user
+    sync_user(user.id, user.username)
     
-async def enforce_critique_format(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.args:
+        arg = context.args[0].lower()
+        if arg == "appeal":
+            draft = USER_TICKET_STATE.get(user.id, {}).get("draft_text", "[No draft captured]")
+            USER_TICKET_STATE[user.id] = {"category": "Post Appeal", "draft_text": draft}
+            await msg.reply_text("📩 **Post Appeal**: Please reply to this message with an explanation for your appeal.")
+            return
+        elif arg == "support":
+            await cmd_support(update, context)
+            return
+
+    resp = await msg.reply_text("Hello! I am The Aug Soc community manager bot. Type /mycredits to check balance or /support for help.")
+    if msg.chat.type != 'private':
+        asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 15))
+        
+    async def enforce_critique_format(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     if not msg or msg.message_thread_id != CRITIQUE_TOPIC_ID:
         return
@@ -1205,10 +1174,10 @@ def main():
             name="weekly_prompt_job"
         )
 
-    # Register Fallback Handlers
+    # Register Handlers
     app.add_handler(CallbackQueryHandler(handle_callbacks))
     
-    # Check topic message formatting first, then pass remaining text to general chat handler
+    # Process incoming text messages
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_chat))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, enforce_critique_format))
 
