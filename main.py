@@ -16,6 +16,15 @@ from telegram.ext import (
 
 DB_FILE = 'critiques.db'
 
+async def auto_delete_messages(bot, chat_id: int, message_ids: list, delay: int = 15):
+    """Deletes a list of message IDs after a specified delay in seconds."""
+    await asyncio.sleep(delay)
+    for msg_id in message_ids:
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        except Exception as e:
+            logging.debug(f"Auto-delete failed for message {msg_id}: {e}")
+
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -388,66 +397,102 @@ async def is_admin(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYP
         return False
 
 # --- Command Handlers ---
+# --- HELPER FOR DB USER LOOKUP ---
+def get_user_id_by_username(username: str):
+    raw_user = username.replace("@", "").strip()
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT user_id FROM user_critiques WHERE LOWER(username) IN (?, ?)",
+        (raw_user.lower(), f"@{raw_user}".lower())
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
+# --- COMMAND HANDLERS ---
 async def cmd_mycredits(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.effective_message
     user = update.effective_user
     sync_user(user.id, user.username)
     count = get_critiques(user.id)
-    await update.message.reply_text(f"📊 **{user.first_name}**, you currently have **{count}** critique credit(s).", parse_mode="Markdown")
+    
+    resp = await msg.reply_text(
+        f"📊 **{user.first_name}**, you currently have **{count}** critique credit(s).", 
+        parse_mode="Markdown"
+    )
+    
+    # Auto-delete command and bot response after 15 seconds
+    asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 15))
+
 
 async def cmd_addcredits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     user = update.effective_user
+    
     if not await is_admin(msg.chat_id, user.id, context):
-        await msg.reply_text("❌ Admin command only.")
+        resp = await msg.reply_text("❌ Admin command only.")
+        asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 10))
         return
 
     args = context.args
     if len(args) < 2:
-        await msg.reply_text("Usage: `/addcredits @username 2` or `/addcredits <USER_ID> 2`", parse_mode="Markdown")
+        resp = await msg.reply_text("Usage: `/addcredits @username 2` or `/addcredits <USER_ID> 2`", parse_mode="Markdown")
+        asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 10))
         return
 
     target_str, amount_str = args[0], args[1]
     try:
         amount = int(amount_str)
     except ValueError:
-        await msg.reply_text("❌ Amount must be a number.")
+        resp = await msg.reply_text("❌ Amount must be a number.")
+        asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 10))
         return
 
-    target_id = None
-    if target_str.isdigit():
-        target_id = int(target_str)
-    else:
-        target_id = get_user_id_by_username(target_str)
+    target_id = int(target_str) if target_str.isdigit() else get_user_id_by_username(target_str)
 
     if not target_id:
-        await msg.reply_text(f"❌ User `{target_str}` not found in database history.", parse_mode="Markdown")
+        resp = await msg.reply_text(f"❌ User `{target_str}` not found in database history.", parse_mode="Markdown")
+        asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 10))
         return
 
     add_critique(target_id, amount)
     new_total = get_critiques(target_id)
-    await msg.reply_text(f"✅ Added {amount} credit(s). New balance for target: **{new_total}**.", parse_mode="Markdown")
+    resp = await msg.reply_text(f"✅ Added {amount} credit(s). New balance for target: **{new_total}**.", parse_mode="Markdown")
+    
+    # Clean up after 15 seconds
+    asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 15))
+
 
 async def cmd_resetcredits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     user = update.effective_user
+    
     if not await is_admin(msg.chat_id, user.id, context):
-        await msg.reply_text("❌ Admin command only.")
+        resp = await msg.reply_text("❌ Admin command only.")
+        asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 10))
         return
 
     args = context.args
     if len(args) < 1:
-        await msg.reply_text("Usage: `/resetcredits @username` or `/resetcredits <USER_ID>`", parse_mode="Markdown")
+        resp = await msg.reply_text("Usage: `/resetcredits @username` or `/resetcredits <USER_ID>`", parse_mode="Markdown")
+        asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 10))
         return
 
     target_str = args[0]
     target_id = int(target_str) if target_str.isdigit() else get_user_id_by_username(target_str)
 
     if not target_id:
-        await msg.reply_text(f"❌ User `{target_str}` not found in database history.", parse_mode="Markdown")
+        resp = await msg.reply_text(f"❌ User `{target_str}` not found in database history.", parse_mode="Markdown")
+        asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 10))
         return
 
     set_critiques(target_id, 0)
-    await msg.reply_text(f"🔄 Reset critique balance to **0** for user `{target_str}`.", parse_mode="Markdown")
+    resp = await msg.reply_text(f"🔄 Reset critique balance to **0** for user `{target_str}`.", parse_mode="Markdown")
+    
+    # Clean up after 15 seconds
+    asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 15))
 
 async def cmd_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
