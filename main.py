@@ -706,7 +706,15 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         content = "\n".join(lines[1:]) if len(lines) > 1 else title
         
         # Create submission record in Database
-        author_display = f"@{user.username}" if user.username else user.first_name
+        # Determine author mention and hashtag
+        if user.username:
+            author_display = f"@{user.username}"
+            user_tag = f"#{user.username}"
+        else:
+            author_display = user.first_name
+            # Remove spaces/special characters so first name is a valid hashtag
+            clean_name = "".join(e for e in user.first_name if e.isalnum())
+            user_tag = f"#{clean_name}"
 
         # Create submission record in Database
         sub_id = create_submission(
@@ -718,10 +726,10 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             content
         )
         
-        # Build submission card with clear #submission tag for scrolling
+        # Build submission card with clear #submission and user hashtag
         formatted_post = (
             f"📖 **SUBMISSION #{sub_id}: {title.upper()}**\n"
-            f"✍️ **Author:** {author_display}\n"
+            f"✍️ **Author:** {author_display} {user_tag}\n"
             f"🏷️ **Tags:** #{genre} #{post_type} #submission\n"
             f"--------------------------------------------------\n\n"
             f"{content}\n\n"
