@@ -41,6 +41,43 @@ from telegram.ext import (
 
 DB_FILE = 'critiques.db'
 
+def init_sqlite_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS prompts (
+            prompt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            category TEXT,
+            challenge_type TEXT,
+            prompt_text TEXT,
+            priority INTEGER DEFAULT 0,
+            is_used INTEGER DEFAULT 0,
+            UNIQUE(prompt_text)
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS tickets (
+            ticket_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            category TEXT,
+            message TEXT,
+            status TEXT DEFAULT 'OPEN',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS review_logs (
+            user_id INTEGER,
+            target_msg_id INTEGER,
+            UNIQUE(user_id, target_msg_id)
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+# Initialize SQLite tables on startup
+init_sqlite_db()
+
 async def auto_delete_messages(bot, chat_id: int, message_ids: list, delay: int = 15):
     """Deletes a list of message IDs after a specified delay in seconds."""
     await asyncio.sleep(delay)
@@ -956,7 +993,7 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if category == "Custom Prompt Purchase":
             use_critiques(user.id, 10)
-            conn = get_db_connection() # or sqlite3.connect(DB_FILE) depending on your db setup
+            conn = sqlite3.connect(DB_FILE)
             cursor = conn.cursor()
             cursor.execute('INSERT INTO prompts (category, challenge_type, prompt_text, priority) VALUES (?, ?, ?, ?)', ('custom', 'weekly', details, 0))
             conn.commit()
