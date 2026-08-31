@@ -1,4 +1,7 @@
 import os
+
+ADMIN_IDS = [int(os.getenv("ADMIN_TELEGRAM_ID", "0"))]
+
 import sqlite3
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -24,6 +27,7 @@ import logging
 import asyncio
 import os
 from threading import Thread
+from telegram import BotCommand, BotCommandScopeAllChatAdministrators
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import (
     Application,
@@ -47,7 +51,7 @@ async def auto_delete_messages(bot, chat_id: int, message_ids: list, delay: int 
             logging.debug(f"Auto-delete failed for message {msg_id}: {e}")
 
 
-TOKEN = os.getenv('BOT_TOKEN', '8998221934:AAEA8SXPZlGrcNexLOTJ86XnpGaZXQIdnL4')
+TOKEN = os.getenv('BOT_TOKEN')
 CRITIQUE_TOPIC_ID = 8
 PROMPTS_TOPIC_ID = 9  # Update this to your exact "Prompts and Challenges" Topic ID
 RESOURCE_HUB_TOPIC_ID = 10  # Update this to your exact Resource Hub Topic ID
@@ -369,6 +373,12 @@ async def cmd_mycredits(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_addcredits(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS:
+        msg = update.effective_message
+        resp = await msg.reply_text("You are not authorized to use this command.")
+        asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 10))
+        return
+
     msg = update.effective_message
     user = update.effective_user
     
