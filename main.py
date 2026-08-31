@@ -1481,17 +1481,14 @@ async def post_init(application: Application):
 from datetime import datetime
 
 async def update_leaderboard_topic(context: ContextTypes.DEFAULT_TYPE):
-    global LAST_LEADERBOARD_MSG_ID
     chat_id = context.job.chat_id
     top_users = get_top_users(10)
-    
     current_time = datetime.now().strftime("%B %d, %Y at %H:%M")
     
     text = (
         f"🏆 **Daily Community Review Leaderboard** 🏆\n"
         f"📅 *Updated on: {current_time}*\n\n"
     )
-    
     for idx, (uname, count) in enumerate(top_users, 1):
         display_name = uname or f"User #{idx}"
         text += f"{idx}. {display_name} — **{count} credits**\n"
@@ -1501,21 +1498,31 @@ async def update_leaderboard_topic(context: ContextTypes.DEFAULT_TYPE):
         "💡 Use `/leaderboard` for latest scores and `/mycredits` for your current score."
     )
     
-    # Delete the previous leaderboard post if it exists
-    if LAST_LEADERBOARD_MSG_ID:
+    # Check if we stored the message ID in job.data, otherwise send a new one
+    msg_id = context.job.data.get("leaderboard_msg_id") if context.job.data else None
+    
+    if msg_id:
         try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=LAST_LEADERBOARD_MSG_ID)
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=msg_id,
+                text=text,
+                parse_mode="Markdown"
+            )
+            return
         except Exception:
+            # If the message was manually deleted, fall through to send a new one
             pass
             
-    # Send the new leaderboard post and store its ID
     sent_msg = await context.bot.send_message(
         chat_id=chat_id,
         message_thread_id=LEADERBOARD_TOPIC_ID,
         text=text,
         parse_mode="Markdown"
     )
-    LAST_LEADERBOARD_MSG_ID = sent_msg.message_id
+    if not context.job.data:
+        context.job.data = {}
+    context.job.data["leaderboard_msg_id"] = sent_msg.message_id
 
 async def track_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Automatically records any new member joining the group into the database."""
