@@ -1152,6 +1152,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
     if data.startswith("subtag_genre_"):
+        await query.answer()
         selected_genre = data.replace("subtag_genre_", "")
         context.user_data['submission_genre'] = selected_genre
         
@@ -1167,18 +1168,6 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
         return
-
-    elif data.startswith("subtag_genre_"):
-        await query.answer()
-        selected_genre = data.replace("subtag_genre_", "")
-        context.user_data['submission_genre'] = selected_genre
-        
-        type_keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("📄 Draft", callback_data="subtag_type_draft"),
-                InlineKeyboardButton("🛠️ Work-in-Progress", callback_data="subtag_type_workinprogress"),
-            ]
-        ])
         
         # Edit message to show type selection
         sent_message = await query.edit_message_text(
@@ -1310,36 +1299,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
             except Exception as e:
                 await query.answer(f"Failed to decline: {e}", show_alert=True)
-                
-    # --- Paste the Join Request handlers here ---
-    elif data.startswith("join_approve_"):
-        parts = data.split("_")
-        if len(parts) >= 4:
-            chat_id, target_user_id = int(parts[2]), int(parts[3])
-            try:
-                await context.bot.approve_chat_join_request(chat_id=chat_id, user_id=target_user_id)
-                await query.edit_message_text(f"{query.message.text}\n\n✅ **APPROVED:** User has been admitted to the group.", parse_mode="Markdown")
-                try:
-                    await context.bot.send_message(chat_id=target_user_id, text="🎉 Your request to join The August Society has been approved! Welcome.")
-                except Exception:
-                    pass
-            except Exception as e:
-                await query.answer(f"Failed to approve: {e}", show_alert=True)
-
-    elif data.startswith("join_decline_"):
-        parts = data.split("_")
-        if len(parts) >= 4:
-            chat_id, target_user_id = int(parts[2]), int(parts[3])
-            try:
-                await context.bot.decline_chat_join_request(chat_id=chat_id, user_id=target_user_id)
-                await query.edit_message_text(f"{query.message.text}\n\n❌ **DECLINED:** Request was rejected.", parse_mode="Markdown")
-                try:
-                    await context.bot.send_message(chat_id=target_user_id, text="ℹ️ Your request to join The August Society was declined by moderators.")
-                except Exception:
-                    pass
-            except Exception as e:
-                await query.answer(f"Failed to decline: {e}", show_alert=True)
-    
+     
     # Interactive Queue Manager Callbacks
     if data.startswith("q_view_"):
         cat = data.replace("q_view_", "")
