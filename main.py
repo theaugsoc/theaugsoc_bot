@@ -1294,21 +1294,36 @@ async def send_scheduled_prompt(context: ContextTypes.DEFAULT_TYPE):
     )
     mark_prompt_used(prompt_id)
     
+from telegram import BotCommandScopeAllGroupChats, BotCommandScopeAllChatAdministrators
+
 async def post_init(application: Application):
-    commands = [
+    # Commands visible to all regular users in groups
+    user_commands = [
         BotCommand("start", "Start the bot and view main menu"),
         BotCommand("mycredits", "Check your current review credits"),
         BotCommand("submitwork", "Submit work for structured critique"),
         BotCommand("submitresource", "Submit a resource for the Resource Hub"),
-        BotCommand("leaderboard", "View review leaderboard"), # <-- Add this
-        BotCommand("shop", "Spend credits on perks and rewards"), # <-- Add this
+        BotCommand("leaderboard", "View review leaderboard"),
+        BotCommand("shop", "Spend credits on perks and rewards"),
         BotCommand("support", "Open a support or report ticket"),
+    ]
+    
+    # Commands visible ONLY to group administrators
+    admin_commands = user_commands + [
         BotCommand("addprompts", "Admin: Add prompts via text"),
         BotCommand("manageprompts", "Admin: Open prompt queue manager"),
         BotCommand("addcredits", "Admin: Add credits to a user"),
         BotCommand("resetcredits", "Admin: Reset credits for a user"),
     ]
-    await application.bot.set_my_commands(commands)
+
+    # Set default/user commands globally
+    await application.bot.set_my_commands(user_commands)
+    
+    # Set admin commands specifically for all group administrators scope
+    await application.bot.set_my_commands(
+        admin_commands, 
+        scope=BotCommandScopeAllChatAdministrators()
+    )
 
 from datetime import datetime
 
