@@ -820,7 +820,7 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pen_name = msg.text.strip()
         context.user_data['pen_name'] = pen_name
         context.user_data['waiting_for_pen_name'] = False
-        context.user_data.get('waiting_for_content', True) # Set next step flag
+        context.user_data['waiting_for_content'] = True # Set next step flag
         
         # Clean up user's pen name message to keep chat tidy
         try:
@@ -935,7 +935,7 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop('submission_type', None)
         context.user_data.pop('pen_name', None)
         return
-
+        
     # CHECK FOR NESTED CRITIQUE REPLIES
     if parent_msg and "Critique Submission #" in (parent_msg.text or ""):
         sub_id = parent_msg.text.split("#")[1].split()[0]
@@ -1401,17 +1401,6 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(f"{query.message.text}\n\n✅ **RESOLVED:** Granted 2 credits to user `{target_id}`.", parse_mode="Markdown")
             try:
                 await context.bot.send_message(chat_id=target_id, text=f"🎉 Ticket #{t_id} resolved! 2 critique credits added to your balance.")
-            except Exception:
-                pass
-
-    elif data.startswith("tck_dismiss_"):   # <-- Check alignment of this line
-        parts = data.split("_")             # <-- Check alignment of this block (8 spaces)
-        if len(parts) >= 4:
-            t_id, target_id = int(parts[2]), int(parts[3])
-            update_ticket_status(t_id, "DISMISSED")
-            await query.edit_message_text(f"{query.message.text}\n\n❌ **DISMISSED:** Ticket closed.", parse_mode="Markdown")
-            try:
-                await context.bot.send_message(chat_id=target_id, text=f"ℹ️ Ticket #{t_id} reviewed and closed by community admins.")
             except Exception:
                 pass
 
