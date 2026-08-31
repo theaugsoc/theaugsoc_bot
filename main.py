@@ -219,36 +219,36 @@ def mark_prompt_used(prompt_id: int):
 ALLOWED_GENRE_TAGS = {'#poetry', '#fiction', '#nonfiction', '#prose', '#essay'}
 ALLOWED_POST_TAGS = {'#critique', '#submission', '#feedback', '#wip'}
 
-def split_text_into_chunks(text: str, max_chars: int = 3000) -> list[str]:
-    """Splits text into chunks of max_chars without breaking mid-paragraph where possible."""
+def split_text_into_chunks(text: str, max_chars: int = 2500) -> list[str]:
+    """Safely splits long text into sequential chunks without dropping paragraphs or words."""
     if len(text) <= max_chars:
         return [text]
 
     chunks = []
     current_chunk = ""
-    paragraphs = text.split("\n\n")
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
 
     for para in paragraphs:
-        # If adding this paragraph exceeds the limit, push current_chunk to list and start new chunk
+        # Check if adding this paragraph exceeds our safety limit
         if len(current_chunk) + len(para) + 2 > max_chars:
             if current_chunk.strip():
                 chunks.append(current_chunk.strip())
                 current_chunk = ""
-            
-            # If a single paragraph alone is huge, break it word-by-word
+
+            # If an individual paragraph itself is over max_chars, split by words
             if len(para) > max_chars:
                 words = para.split()
                 for word in words:
-                    if len(current_chunk) + len(word) + 1 <= max_chars:
-                        current_chunk += (word + " ")
-                    else:
+                    if len(current_chunk) + len(word) + 1 > max_chars:
                         chunks.append(current_chunk.strip())
                         current_chunk = word + " "
+                    else:
+                        current_chunk += word + " "
                 current_chunk += "\n\n"
             else:
                 current_chunk = para + "\n\n"
         else:
-            current_chunk += (para + "\n\n")
+            current_chunk += para + "\n\n"
 
     if current_chunk.strip():
         chunks.append(current_chunk.strip())
