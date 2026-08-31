@@ -345,9 +345,14 @@ def use_critiques(user_id: int, count: int = 2):
 
 def get_user_id_by_username(username: str):
     clean_name = username.lstrip('@')
+    with_at = f"@{clean_name}"
+    
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    cursor.execute('SELECT user_id FROM user_critiques WHERE LOWER(username) = LOWER(?)', (clean_name,))
+    cursor.execute(
+        'SELECT user_id FROM user_critiques WHERE LOWER(username) = LOWER(?) OR LOWER(username) = LOWER(?)', 
+        (clean_name, with_at)
+    )
     row = cursor.fetchone()
     conn.close()
     return row[0] if row else None
