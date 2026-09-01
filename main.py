@@ -929,7 +929,26 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not msg.text:
             return
         pen_name = msg.text.strip()
-            
+        context.user_data['pen_name'] = pen_name
+        context.user_data['waiting_for_pen_name'] = False
+        context.user_data['waiting_for_content'] = True  # Set next step flag
+
+        # Clean up user's pen name message to keep chat tidy
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+
+        # Ask for the actual writing content (Title + Body)
+        prompt_msg = await context.bot.send_message(
+            chat_id=msg.chat_id,
+            message_thread_id=msg.message_thread_id if hasattr(msg, 'message_thread_id') else None,
+            text=f"✅ Pen Name recorded as **{pen_name}**.\n\nNow, please reply with your **Title on the first line**, followed by your content:",
+            parse_mode="Markdown"
+        )
+        context.user_data['prompt_msg_id'] = prompt_msg.message_id
+        return
+
     if context.user_data.get('waiting_for_content'):
         # Step 2: Immediately capture and delete the user's input message to keep chat tidy
         user_msg_id = msg.message_id
