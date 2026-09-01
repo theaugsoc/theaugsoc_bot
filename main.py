@@ -1945,7 +1945,7 @@ def main():
         )
         app.job_queue.run_daily(
             update_leaderboard_topic,
-            time=time(hour=0, minute=0, second=0, tzinfo=ZoneInfo("Asia/Kolkata")),
+            time=time(hour=9, minute=0, second=0, tzinfo=ZoneInfo("Asia/Kolkata")),
             chat_id=group_chat_id,
             name="daily_leaderboard_job"
         )
