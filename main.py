@@ -1062,10 +1062,13 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logging.debug(f"Could not delete message {mid}: {e}")
 
         # Notify user that submission is pending moderation
-        await context.bot.send_message(
+        sent_ack = await context.bot.send_message(
             chat_id=msg.chat_id,
-            text="✅ **Submission Received!** Your work (and file attachment) has been sent to the moderators for review. You will be notified once it is approved and posted.",
-            parse_mode="Markdown"
+            text="✅ Submission Received! Your work (and file attachment) has been sent to the moderators for review. You will be notified once it is approved and posted."
+        )
+        # Automatically remove the confirmation message after 15 seconds to keep the chat clean
+        context.application.create_task(
+            auto_delete_prompt(context, sent_ack.chat_id, sent_ack.message_id, delay=15)
         )
 
         # Clear remaining submission context data
@@ -1491,13 +1494,27 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Retrieve ticket message payload from SQLite DB
             conn = sqlite3.connect(DB_FILE)
             cursor = conn.cursor()
-            cursor.execute('SELECT message FROM tickets WHERE ticket_id = ?', (t_id,))
+            cursor.execute('SELECT message, status FROM tickets WHERE ticket_id = ?', (t_id,))
             row = cursor.fetchone()
             conn.close()
 
             if not row:
                 await query.answer("❌ Submission ticket not found.", show_alert=True)
                 return
+
+            status = row[1]
+            if status in ["RESOLVED_APPROVED", "REJECTED"]:
+                await query.answer("⚠️ This ticket has already been processed!", show_alert=True)
+                return
+
+            # Immediately update ticket status in DB to prevent race conditions/double-clicking
+            update_ticket_status(t_id, "RESOLVED_APPROVED")
+
+            # Remove inline buttons immediately so it cannot be clicked again
+            try:
+                await query.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                pass
 
             payload = row[0]
             lines = payload.splitlines()
@@ -1571,8 +1588,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode=None
                 )
 
-            update_ticket_status(t_id, "RESOLVED_APPROVED")
-            await query.edit_message_text(f"{query.message.text}\n\n✅ **APPROVED & POSTED** to channel and critique topic.", parse_mode="Markdown")
+            await query.message.reply_text(f"✅ **APPROVED & POSTED:** Ticket #{t_id} published as Submission #{sub_id}.", parse_mode="Markdown")
             try:
                 await context.bot.send_message(chat_id=target_id, text=f"🎉 Your work submission (#{sub_id}) has been approved and published!")
             except Exception:
@@ -1583,6 +1599,23 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(parts) >= 4:
             t_id, target_id = int(parts[2]), int(parts[3])
             
+            # Check DB to prevent double-clicking or acting on an already resolved ticket
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            cursor.execute('SELECT status FROM tickets WHERE ticket_id = ?', (t_id,))
+            row = cursor.fetchone()
+            conn.close()
+
+            if row and row[0] in ["RESOLVED_APPROVED", "REJECTED"]:
+                await query.answer("⚠️ This ticket has already been processed!", show_alert=True)
+                return
+
+            # Remove inline buttons immediately so it cannot be double-clicked
+            try:
+                await query.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                pass
+
             # Save state so the bot knows the admin is about to type a rejection reason in DM
             USER_TICKET_STATE[user.id] = {
                 "category": "Work Rejection Reason",
