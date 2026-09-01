@@ -1053,6 +1053,7 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         )
                 except Exception as e:
                     logging.error(f"Failed to send work submission review to admin {admin_id}: {e}")
+                    await msg.reply_text(f"⚠️ Warning: Could not send approval card to admin ({admin_id}). Please ensure the admin has opened a DM with the bot and sent /start.")
 
         # Clean up temporary prompt message
         prompt_msg_id = context.user_data.pop('prompt_msg_id', None)
@@ -1141,11 +1142,14 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             full_content = f"**Category:** {mandatory_tag}\n{caption}{file_info}"
             t_id = create_ticket(user.id, category, full_content)
 
+            username_str = f"@{user.username}" if user.username else "No Username"
             admin_text = (
                 f"📦 **NEW RESOURCE SUBMISSION #{t_id}**\n"
-                f"**Submitted By:** {user.full_name} (@{user.username} | ID: `{user.id}`)\n\n"
+                f"**Submitted By:** {user.full_name} ({username_str} | ID: `{user.id}`)\n\n"
                 f"{full_content}"
             )
+            # Truncate caption to stay safely within Telegram's 1024-character limit
+            admin_caption = admin_text[:1000] + "..." if len(admin_text) > 1000 else admin_text
             buttons = [
                 [
                     InlineKeyboardButton("✅ Approve & Post", callback_data=f"res_approve_{t_id}_{user.id}"),
@@ -1159,11 +1163,11 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if admin_id and admin_id != 0:
                     try:
                         if msg.document:
-                            await context.bot.send_document(chat_id=admin_id, document=msg.document.file_id, caption=admin_text, reply_markup=InlineKeyboardMarkup(buttons))
+                            await context.bot.send_document(chat_id=admin_id, document=msg.document.file_id, caption=admin_caption, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
                         elif msg.photo:
-                            await context.bot.send_photo(chat_id=admin_id, photo=msg.photo[-1].file_id, caption=admin_text, reply_markup=InlineKeyboardMarkup(buttons))
+                            await context.bot.send_photo(chat_id=admin_id, photo=msg.photo[-1].file_id, caption=admin_caption, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
                         else:
-                            await context.bot.send_message(chat_id=admin_id, text=admin_text, reply_markup=InlineKeyboardMarkup(buttons))
+                            await context.bot.send_message(chat_id=admin_id, text=admin_text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
                         print(f"DEBUG: Successfully sent submission to admin ID {admin_id}")
                     except Exception as e:
                         print(f"ERROR: Failed to send submission to admin ID {admin_id}: {e}")
@@ -1345,6 +1349,35 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await warn.delete()
         else:
             use_critiques(user.id, 2)
+            
+            # Extract content safely for standalone posts
+            submission_text = msg.text or msg.caption or "No text provided."
+            preview = submission_text[:500] + "..." if len(submission_text) > 500 else submission_text
+            
+            admin_text = (
+                f"📥 **NEW STANDALONE SUBMISSION FOR REVIEW**\n\n"
+                f"**User:** {user.mention_markdown()} (`{user.id}`)\n"
+                f"**Word Count:** {words}\n\n"
+                f"**Submission:**\n{preview}"
+            )
+            buttons = [
+                [
+                    InlineKeyboardButton("✅ Approve", callback_data=f"approve_{user.id}"),
+                    InlineKeyboardButton("❌ Reject", callback_data=f"reject_{user.id}")
+                ]
+            ]
+            
+            for admin_id in ADMIN_IDS:
+                if admin_id != 0:
+                    try:
+                        if msg.document:
+                            await context.bot.send_document(chat_id=admin_id, document=msg.document.file_id, caption=admin_text[:1000], reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+                        elif msg.photo:
+                            await context.bot.send_photo(chat_id=admin_id, photo=msg.photo[-1].file_id, caption=admin_text[:1000], reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+                        else:
+                            await context.bot.send_message(chat_id=admin_id, text=admin_text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+                    except Exception as e:
+                        logging.error(f"Failed to send standalone review to admin {admin_id}: {e}")
 
 # --- Callback Button Handlers ---
 async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
