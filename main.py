@@ -179,6 +179,7 @@ def mark_prompt_used(prompt_id: int):
 # --- SUBMISSION & REVIEW HELPERS ---
 ALLOWED_GENRE_TAGS = {'#poetry', '#fiction', '#nonfiction', '#concept'}
 ALLOWED_POST_TAGS = {'#draft', '#submission', '#workinprogress', '#wip'}
+ALLOWED_CRITIQUE_TAGS = {'#review', '#feedback', '#critique'}
 
 # --- ADD THIS HELPER FUNCTION HERE ---
 def init_restored_table():
@@ -1229,11 +1230,30 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # CASE A: CRITIQUE SUBMISSION (#review)
     if is_real_reply:
-        if "#review" not in text.lower() or parent_msg.from_user.id == user.id:
+        # Check if the message is a reply to a work submission
+        parent_msg = msg.reply_to_message
+        if not parent_msg:
             return
+
+        # Ensure the review contains at least one explicit critique tag
+        text_lower = msg.text.lower() if msg.text else ""
+        has_valid_critique_tag = any(tag in text_lower for tag in ALLOWED_CRITIQUE_TAGS)
+
+        if not has_valid_critique_tag:
+            try:
+                await msg.delete()
+                # Optional: Notify user or log why it was deleted
+            except Exception:
+                pass
+            return
+
+        if parent_msg.from_user.id == user.id:
+            return
+            
         if has_user_reviewed_post(user.id, parent_msg.message_id):
             return
 
+        words = len(text_lower.split())
         if words >= 20:
             log_post_review(user.id, parent_msg.message_id)
             add_critique(user.id, 1, user.username)
@@ -1242,7 +1262,7 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             note = await context.bot.send_message(
                 chat_id=msg.chat_id,
                 message_thread_id=msg.message_thread_id,
-                text=f"✅ Valid #review logged for {user.first_name}! ({total}/2 completed)"
+                text=f"✅ Valid critique logged for {user.first_name}! ({total}/2 completed)"
             )
             await asyncio.sleep(4)
             await note.delete()
