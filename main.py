@@ -1785,11 +1785,11 @@ async def update_leaderboard_topic(context: ContextTypes.DEFAULT_TYPE):
         "💡 Use `/leaderboard` for latest scores and `/mycredits` for your current score."
     )
     
-    # Check if we stored the message ID in job.data, otherwise send a new one
-    msg_id = context.job.data.get("leaderboard_msg_id") if context.job.data else None
+    job_data = context.job.data if context.job.data else {}
+    msg_id = job_data.get("leaderboard_msg_id")
     
-    if msg_id:
-        try:
+    try:
+        if msg_id:
             await context.bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=msg_id,
@@ -1797,19 +1797,20 @@ async def update_leaderboard_topic(context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown"
             )
             return
-        except Exception:
-            # If the message was manually deleted, fall through to send a new one
-            pass
+    except Exception:
+        pass 
             
-    sent_msg = await context.bot.send_message(
-        chat_id=chat_id,
-        message_thread_id=LEADERBOARD_TOPIC_ID,
-        text=text,
-        parse_mode="Markdown"
-    )
-    if not context.job.data:
-        context.job.data = {}
-    context.job.data["leaderboard_msg_id"] = sent_msg.message_id
+    try:
+        sent_msg = await context.bot.send_message(
+            chat_id=chat_id,
+            message_thread_id=LEADERBOARD_TOPIC_ID,
+            text=text,
+            parse_mode="Markdown"
+        )
+        job_data["leaderboard_msg_id"] = sent_msg.message_id
+        context.job.data = job_data
+    except Exception as e:
+        logging.error(f"Failed to post daily leaderboard: {e}")
 
 async def track_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Automatically records any new member joining the group into the database."""
@@ -1942,10 +1943,9 @@ def main():
             chat_id=group_chat_id,
             name="conditional_prompt_job"
         )
-        app.job_queue.run_repeating(
+        app.job_queue.run_daily(
             update_leaderboard_topic,
-            interval=86400,  # Every 24 hours
-            first=15,
+            time=time(hour=0, minute=0, second=0, tzinfo=ZoneInfo("Asia/Kolkata")),
             chat_id=group_chat_id,
             name="daily_leaderboard_job"
         )
