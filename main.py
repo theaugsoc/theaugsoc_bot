@@ -177,7 +177,7 @@ def mark_prompt_used(prompt_id: int):
     conn.close()
 
 # --- SUBMISSION & REVIEW HELPERS ---
-ALLOWED_GENRE_TAGS = {'#poetry', '#fiction', '#nonfiction', '#prose', '#essay'}
+ALLOWED_GENRE_TAGS = {'#poetry', '#fiction', '#nonfiction', '#concept'}
 ALLOWED_POST_TAGS = {'#draft', '#submission', '#workinprogress', '#wip'}
 
 def split_text_into_chunks(text: str, max_chars: int = 2500) -> list[str]:
@@ -590,12 +590,12 @@ async def cmd_submitwork(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("📖 Fiction", callback_data="subtag_genre_fiction"),
+            InlineKeyboardButton("🎭 Fiction", callback_data="subtag_genre_fiction"),
             InlineKeyboardButton("✍️ Poetry", callback_data="subtag_genre_poetry"),
         ],
         [
-            InlineKeyboardButton("📝 Non-Fiction", callback_data="subtag_genre_nonfiction"),
-            InlineKeyboardButton("🎭 Script/Other", callback_data="subtag_genre_other"),
+            InlineKeyboardButton("📖 Non-Fiction", callback_data="subtag_genre_nonfiction"),
+            InlineKeyboardButton("📝 Concept", callback_data="subtag_genre_other"),
         ]
     ])
 
@@ -866,6 +866,20 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             title = " ".join(words[:8]) + "..." if len(words) > 8 else full_text
             content = full_text
 
+        # Extract up to 3 custom tags from the body content and clean them from text
+        content_words = content.split()
+        custom_tags = []
+        cleaned_content_words = []
+        for word in content_words:
+            if word.startswith('#') and len(word) > 1 and len(custom_tags) < 3:
+                if word not in custom_tags:
+                    custom_tags.append(word)
+            else:
+                cleaned_content_words.append(word)
+        
+        content = " ".join(cleaned_content_words)
+        custom_tags_str = " " + " ".join(custom_tags) if custom_tags else ""
+
         # Create database record
         sub_id = create_submission(
             user.id, 
@@ -876,10 +890,9 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             content
         )
 
-        # Deduct credits (exactly 2 credits total, no extra points deducted)
+        # Deduct credits
         use_critiques(user.id, 2)
         
-        # Adjust max_chars to safely match your desired word chunk limit (~525 words)
         chunks = split_text_into_chunks(content, max_chars=3000)
         total_parts = len(chunks)
 
@@ -894,7 +907,7 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             header = (
                 f"📖 SUBMISSION #{sub_id}: {title.upper()}{part_suffix}\n"
                 f"✍️ Author: {author_display}\n"
-                f"🏷️ Tags: #{genre} #{post_type} #submission {formatted_pen_hashtag}\n"
+                f"🏷️ Tags: #{genre} #{post_type} #submission{custom_tags_str} {formatted_pen_hashtag}\n"
                 f"--------------------------------------------------\n\n"
             )
             
