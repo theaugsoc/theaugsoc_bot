@@ -876,10 +876,11 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             content
         )
 
-        # Deduct credits
+        # Deduct credits (exactly 2 credits total, no extra points deducted)
         use_critiques(user.id, 2)
         
-        chunks = split_text_into_chunks(content, max_chars=2500)
+        # Adjust max_chars to safely match your desired word chunk limit (~525 words)
+        chunks = split_text_into_chunks(content, max_chars=3000)
         total_parts = len(chunks)
 
         keyboard = InlineKeyboardMarkup([
@@ -916,6 +917,7 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     logging.error(f"Failed to post to channel: {e}")
 
+            # Ensure every single chunk sent to the group chat is cleanly dispatched
             await context.bot.send_message(
                 chat_id=msg.chat_id,
                 message_thread_id=msg.message_thread_id,
@@ -924,13 +926,17 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode=None
             )
 
-        # Clean up temporary prompt message
+        # Clean up temporary prompt and user messages securely
         prompt_msg_id = context.user_data.pop('prompt_msg_id', None)
+        to_delete = [msg.message_id]
         if prompt_msg_id:
+            to_delete.append(prompt_msg_id)
+
+        for mid in to_delete:
             try:
-                await context.bot.delete_message(chat_id=msg.chat_id, message_id=prompt_msg_id)
+                await context.bot.delete_message(chat_id=msg.chat_id, message_id=mid)
             except Exception as e:
-                logging.debug(f"Could not delete prompt message {prompt_msg_id}: {e}")
+                logging.debug(f"Could not delete message {mid}: {e}")
 
         # Clear remaining submission context data
         context.user_data.pop('submission_genre', None)
