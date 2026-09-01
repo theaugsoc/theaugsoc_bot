@@ -849,7 +849,7 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_in_workflow:
         await enforce_critique_format(update, context)
         
-    if not msg.text:
+    if not msg.text and not msg.document and not msg.photo:
         return
 
     text = msg.text
@@ -1009,7 +1009,7 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"CUSTOM_TAGS:{custom_tags_str}\n"
             f"PEN_HASHTAG: {formatted_pen_hashtag}\n"
             f"USER_ID: {user.id}\n"
-            f"USERNAME: {user.username or 'none'}"
+            f"USERNAME: {user.username or 'none'}\n"
             f"{file_meta}\n"
             f"--------------------------------------------------\n"
             f"{content}"
@@ -1054,17 +1054,13 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     logging.error(f"Failed to send work submission review to admin {admin_id}: {e}")
 
-        # Clean up temporary prompt and user messages
+        # Clean up temporary prompt message
         prompt_msg_id = context.user_data.pop('prompt_msg_id', None)
-        to_delete = [user_msg_id]
         if prompt_msg_id:
-            to_delete.append(prompt_msg_id)
-
-        for mid in to_delete:
             try:
-                await context.bot.delete_message(chat_id=msg.chat_id, message_id=mid)
+                await context.bot.delete_message(chat_id=msg.chat_id, message_id=prompt_msg_id)
             except Exception as e:
-                logging.debug(f"Could not delete message {mid}: {e}")
+                logging.debug(f"Could not delete prompt message {prompt_msg_id}: {e}")
 
         # Notify user that submission is pending moderation
         sent_ack = await context.bot.send_message(
@@ -1157,12 +1153,19 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ]
             ]
             
-            # If a file/photo was sent, forward it to admin review along with markup
-            if msg.document or msg.photo:
-                await context.bot.send_message(chat_id=msg.chat_id, text=admin_text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
-            else:
-                await context.bot.send_message(chat_id=msg.chat_id, text=admin_text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
-                
+            # Send resource submission review card to all admins
+            for admin_id in ADMIN_IDS:
+                if admin_id != 0:
+                    try:
+                        if msg.document:
+                            await context.bot.send_document(chat_id=admin_id, document=msg.document.file_id, caption=admin_text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+                        elif msg.photo:
+                            await context.bot.send_photo(chat_id=admin_id, photo=msg.photo[-1].file_id, caption=admin_text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+                        else:
+                            await context.bot.send_message(chat_id=admin_id, text=admin_text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+                    except Exception as e:
+                        logging.error(f"Failed to send resource submission to admin {admin_id}: {e}")
+                        
             await msg.reply_text("✅ Your resource has been submitted to the moderators for review. You'll be notified when it's posted!")
             return
 
