@@ -847,6 +847,9 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg.text:
         return
 
+    text = msg.text
+    user = update.effective_user
+
     # Direct Public Admin Post Handler (#mod + #public)
     if await is_admin(msg.chat_id, user.id, context) and "#mod" in text.lower() and "#public" in text.lower():
         # Prevent double processing
