@@ -180,6 +180,36 @@ def mark_prompt_used(prompt_id: int):
 ALLOWED_GENRE_TAGS = {'#poetry', '#fiction', '#nonfiction', '#concept'}
 ALLOWED_POST_TAGS = {'#draft', '#submission', '#workinprogress', '#wip'}
 
+# --- ADD THIS HELPER FUNCTION HERE ---
+def init_restored_table():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS restored_messages (
+            message_id INTEGER PRIMARY KEY
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+init_restored_table()
+
+def mark_message_restored(message_id: int):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('INSERT OR IGNORE INTO restored_messages (message_id) VALUES (?)', (message_id,))
+    conn.commit()
+    conn.close()
+
+def is_message_restored(message_id: int) -> bool:
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute('SELECT 1 FROM restored_messages WHERE message_id = ?', (message_id,))
+    exists = cursor.fetchone()
+    conn.close()
+    return exists is not None
+# ----------------------------------
+
 def split_text_into_chunks(text: str, max_chars: int = 2500) -> list[str]:
     """Safely splits long text into sequential chunks without dropping paragraphs or words."""
     if len(text) <= max_chars:
@@ -728,8 +758,16 @@ async def enforce_critique_format(update: Update, context: ContextTypes.DEFAULT_
     
     is_admin_user = await is_admin(msg.chat_id, user.id, context)
     has_mod_tag = "#mod" in text.lower()
+    has_public_tag = "#public" in text.lower()
 
-    if is_admin_user or has_mod_tag:
+    # Always protect manually restored posts from being deleted/filtered
+    if is_message_restored(msg.message_id):
+        return
+
+    # Admins posting with both #mod and #public will be handled by the public broadcaster below
+    if is_admin_user and has_mod_tag and has_public_tag:
+        pass  # Let it pass through to the auto-broadcaster
+    elif is_admin_user or has_mod_tag:
         return
 
     parent_msg = msg.reply_to_message
@@ -798,6 +836,32 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg.text:
         return
 
+    # Direct Public Admin Post Handler (#mod + #public)
+    if await is_admin(msg.chat_id, user.id, context) and "#mod" in text.lower() and "#public" in text.lower():
+        # Prevent double processing
+        if msg.message_id in PROCESSED_MSG_IDS:
+            return
+        PROCESSED_MSG_IDS.add(msg.message_id)
+
+        # Clean text or extract parts if needed (keeping original text)
+        chunks = split_text_into_chunks(text, max_chars=3000)
+        total_parts = len(chunks)
+
+        for i, chunk in enumerate(chunks, 1):
+            part_suffix = f" ({i}/{total_parts})" if total_parts > 1 else ""
+            formatted_post = f"{chunk}{part_suffix}" if total_parts > 1 else chunk
+
+            if CHANNEL_ID:
+                try:
+                    await context.bot.send_message(
+                        chat_id=CHANNEL_ID,
+                        text=formatted_post,
+                        parse_mode=None
+                    )
+                except Exception as e:
+                    logging.error(f"Failed to post public admin message to channel: {e}")
+        return
+
     # Deduplication Guard: If this exact message ID is already being processed, stop!
     if msg.message_id in PROCESSED_MSG_IDS:
         return
@@ -855,16 +919,43 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         formatted_pen_hashtag = f"#{pen_name.replace(' ', '_')}"
         author_display = pen_name
 
-        full_text = msg.text.strip()
+        # Extract text from message body or file caption
+        full_text = msg.text or msg.caption or ""
+        file_doc = msg.document
+        file_photo = msg.photo[-1] if msg.photo else None
+
+        # --- PASTE EXTENSION CHECK HERE ---
+        ALLOWED_EXTENSIONS = ('.docx', '.pdf', '.txt', '.epub', '.odt', '.rtf', '.md')
+        if file_doc:
+            file_name = file_doc.file_name or ""
+            if not file_name.lower().endswith(ALLOWED_EXTENSIONS):
+                # Clean up prompt message and notify user
+                prompt_msg_id = context.user_data.pop('prompt_msg_id', None)
+                if prompt_msg_id:
+                    try:
+                        await context.bot.delete_message(chat_id=msg.chat_id, message_id=prompt_msg_id)
+                    except:
+                        pass
+                try:
+                    await msg.delete()
+                except:
+                    pass
+                await context.bot.send_message(
+                    chat_id=msg.chat_id, 
+                    text="❌ **Unsupported file format.** Please upload a supported document format (e.g., PDF, DOCX, TXT).",
+                    parse_mode="Markdown"
+                )
+                return
+        # ----------------------------------
+
         lines = full_text.splitlines()
-        
         if len(lines) > 1:
             title = lines[0].strip()
             content = "\n".join(lines[1:]).strip()
         else:
             words = full_text.split()
-            title = " ".join(words[:8]) + "..." if len(words) > 8 else full_text
-            content = full_text
+            title = " ".join(words[:8]) + "..." if len(words) > 8 else (full_text if words else "Untitled Work")
+            content = full_text if words else "[File Attachment Submission]"
 
         # Extract up to 3 custom tags from the body content and clean them from text
         content_words = content.split()
@@ -880,68 +971,73 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         content = " ".join(cleaned_content_words)
         custom_tags_str = " " + " ".join(custom_tags) if custom_tags else ""
 
-        # Create database record
-        sub_id = create_submission(
-            user.id, 
-            author_display, 
-            title, 
-            f"#{genre}", 
-            f"#{post_type}", 
-            content
+        # Deduct credits temporarily upon submission
+        use_critiques(user.id, 2)
+
+        # Append file tracking info into the ticket payload if a file/photo is present
+        file_meta = ""
+        if file_doc:
+            file_meta = f"\nATTACHED_DOCUMENT: {file_doc.file_id} | {file_doc.file_name or 'unnamed_file'}"
+        elif file_photo:
+            file_meta = f"\nATTACHED_PHOTO: {file_photo.file_id}"
+
+        # Package submission data into a review ticket payload
+        ticket_payload = (
+            f"TITLE: {title}\n"
+            f"AUTHOR: {author_display}\n"
+            f"GENRE: #{genre}\n"
+            f"TYPE: #{post_type}\n"
+            f"CUSTOM_TAGS:{custom_tags_str}\n"
+            f"PEN_HASHTAG: {formatted_pen_hashtag}\n"
+            f"USER_ID: {user.id}\n"
+            f"USERNAME: {user.username or 'none'}"
+            f"{file_meta}\n"
+            f"--------------------------------------------------\n"
+            f"{content}"
         )
 
-        # Deduct credits
-        use_critiques(user.id, 2)
-        
-        chunks = split_text_into_chunks(content, max_chars=3000)
-        total_parts = len(chunks)
+        t_id = create_ticket(user.id, "Work Submission Review", ticket_payload)
 
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("💬 Leave Critique", callback_data=f"sub_rev_{sub_id}_{user.username or 'author'}")]
-        ])
+        file_notice = "\n📎 **Includes File Attachment**" if (file_doc or file_photo) else ""
+        content_preview = content[:1000] if len(content) > 1000 else content
 
-        # Send all parts under the submission ID
-        for i, chunk in enumerate(chunks, 1):
-            part_suffix = f" ({i}/{total_parts})" if total_parts > 1 else ""
-            
-            header = (
-                f"📖 SUBMISSION #{sub_id}: {title.upper()}{part_suffix}\n"
-                f"✍️ Author: {author_display}\n"
-                f"🏷️ Tags: #{genre} #{post_type} #submission{custom_tags_str} {formatted_pen_hashtag}\n"
-                f"--------------------------------------------------\n\n"
-            )
-            
-            footer = (
-                f"\n\n--------------------------------------------------\n"
-                f"💬 Click 'Leave Critique' below or reply directly to review this work!" 
-                if i == total_parts else ""
-            )
+        admin_text = (
+            f"📄 **NEW WORK SUBMISSION REVIEW #{t_id}**{file_notice}\n"
+            f"**Author:** {author_display} (@{user.username or 'none'} | ID: `{user.id}`)\n"
+            f"**Title:** {title}\n"
+            f"**Tags:** #{genre} #{post_type}{custom_tags_str} {formatted_pen_hashtag}\n\n"
+            f"--------------------------------------------------\n"
+            f"{content_preview}"
+        )
 
-            formatted_post = f"{header}{chunk}{footer}"
-            reply_markup = keyboard if i == total_parts else None
+        buttons = [
+            [
+                InlineKeyboardButton("✅ Approve & Post", callback_data=f"work_approve_{t_id}_{user.id}"),
+                InlineKeyboardButton("❌ Reject & Refund", callback_data=f"work_reject_{t_id}_{user.id}")
+            ]
+        ]
 
-            if CHANNEL_ID:
+        # Send review card to all admins (if a file/photo is attached, forward or send file preview to admin as well)
+        for admin_id in ADMIN_IDS:
+            if admin_id != 0:
                 try:
-                    await context.bot.send_message(
-                        chat_id=CHANNEL_ID,
-                        text=formatted_post,
-                        parse_mode=None
-                    )
+                    if file_doc:
+                        await context.bot.send_document(chat_id=admin_id, document=file_doc.file_id, caption=admin_text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+                    elif file_photo:
+                        await context.bot.send_photo(chat_id=admin_id, photo=file_photo.file_id, caption=admin_text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+                    else:
+                        await context.bot.send_message(
+                            chat_id=admin_id,
+                            text=admin_text,
+                            reply_markup=InlineKeyboardMarkup(buttons),
+                            parse_mode="Markdown"
+                        )
                 except Exception as e:
-                    logging.error(f"Failed to post to channel: {e}")
+                    logging.error(f"Failed to send work submission review to admin {admin_id}: {e}")
 
-            # Ensure every single chunk sent to the group chat is cleanly dispatched
-            await context.bot.send_message(
-                chat_id=msg.chat_id,
-                message_thread_id=msg.message_thread_id,
-                text=formatted_post,
-                reply_markup=reply_markup,
-                parse_mode=None
-            )
-
-        # Clean up temporary prompt and user messages securely
+        # Clean up temporary prompt and user messages
         prompt_msg_id = context.user_data.pop('prompt_msg_id', None)
-        to_delete = [msg.message_id]
+        to_delete = [user_msg_id]
         if prompt_msg_id:
             to_delete.append(prompt_msg_id)
 
@@ -950,6 +1046,13 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.delete_message(chat_id=msg.chat_id, message_id=mid)
             except Exception as e:
                 logging.debug(f"Could not delete message {mid}: {e}")
+
+        # Notify user that submission is pending moderation
+        await context.bot.send_message(
+            chat_id=msg.chat_id,
+            text="✅ **Submission Received!** Your work (and file attachment) has been sent to the moderators for review. You will be notified once it is approved and posted.",
+            parse_mode="Markdown"
+        )
 
         # Clear remaining submission context data
         context.user_data.pop('submission_genre', None)
@@ -1041,6 +1144,33 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text("✅ Your resource has been submitted to the moderators for review. You'll be notified when it's posted!")
             return
 
+        if category == "Work Rejection Reason":
+            target_id = state.get("target_user_id")
+            t_id = state.get("ticket_id")
+            reason = msg.text or "No reason provided."
+
+            # Refund the 2 credits back to the user
+            add_critique(target_id, 2)
+            update_ticket_status(t_id, "REJECTED")
+
+            # Send the custom reason directly to the user's DM
+            try:
+                await context.bot.send_message(
+                    chat_id=target_id,
+                    text=(
+                        f"ℹ️ **Work Submission Update (Ticket #{t_id})**\n\n"
+                        f"Your submission was declined by the moderators.\n"
+                        f"💬 **Reason:** {reason}\n\n"
+                        f"✅ Your 2 critique credits have been refunded to your balance."
+                    ),
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                logging.error(f"Failed to DM user {target_id} rejection reason: {e}")
+
+            await msg.reply_text(f"✅ Rejection reason sent to user and 2 credits refunded.")
+            return
+        
         if category == "Custom Prompt Purchase":
             use_critiques(user.id, 10)
             conn = sqlite3.connect(DB_FILE)
@@ -1120,6 +1250,11 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # CASE B: STANDALONE DRAFT SUBMISSION
     if not is_real_reply and words > 0 and "Tags Selected:" not in parent_text:
+        # --- ADD THIS SAFEGUARD CHECK HERE ---
+        if is_message_restored(msg.message_id):
+            return
+        # -------------------------------------
+        
         if words > 1000:
             try:
                 await msg.delete()
@@ -1315,6 +1450,117 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 await query.answer(f"Failed to decline: {e}", show_alert=True)
      
+    elif data.startswith("work_approve_"):
+        parts = data.split("_")
+        if len(parts) >= 4:
+            t_id, target_id = int(parts[2]), int(parts[3])
+            
+            # Retrieve ticket message payload from SQLite DB
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            cursor.execute('SELECT message FROM tickets WHERE ticket_id = ?', (t_id,))
+            row = cursor.fetchone()
+            conn.close()
+
+            if not row:
+                await query.answer("❌ Submission ticket not found.", show_alert=True)
+                return
+
+            payload = row[0]
+            lines = payload.splitlines()
+            title = lines[0].replace("TITLE: ", "").strip()
+            author_display = lines[1].replace("AUTHOR: ", "").strip()
+            genre = lines[2].replace("GENRE: ", "").strip()
+            post_type = lines[3].replace("TYPE: ", "").strip()
+            custom_tags_str = lines[4].replace("CUSTOM_TAGS:", "").strip()
+            formatted_pen_hashtag = lines[5].replace("PEN_HASHTAG: ", "").strip()
+            
+            content_start_idx = 0
+            for idx, line in enumerate(lines):
+                if "--------------------------------------------------" in line:
+                    content_start_idx = idx + 1
+                    break
+            content = "\n".join(lines[content_start_idx:]).strip()
+
+            # Create submission in PostgreSQL database to generate sub_id
+            sub_id = create_submission(
+                target_id, 
+                author_display, 
+                title, 
+                genre, 
+                post_type, 
+                content
+            )
+
+            chunks = split_text_into_chunks(content, max_chars=3000)
+            cluster_parts = len(chunks)
+
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💬 Leave Critique", callback_data=f"sub_rev_{sub_id}_{author_display}")]
+            ])
+
+            group_chat_id = int(os.getenv("GROUP_CHAT_ID", "-1001234567890"))
+
+            for i, chunk in enumerate(chunks, 1):
+                part_suffix = f" ({i}/{cluster_parts})" if cluster_parts > 1 else ""
+                
+                header = (
+                    f"📖 SUBMISSION #{sub_id}: {title.upper()}{part_suffix}\n"
+                    f"✍️ Author: {author_display}\n"
+                    f"🏷️ Tags: {genre} {post_type} #submission {custom_tags_str} {formatted_pen_hashtag}\n"
+                    f"--------------------------------------------------\n\n"
+                )
+                
+                footer = (
+                    f"\n\n--------------------------------------------------\n"
+                    f"💬 Click 'Leave Critique' below or reply directly to review this work!" 
+                    if i == cluster_parts else ""
+                )
+
+                formatted_post = f"{header}{chunk}{footer}"
+                reply_markup = keyboard if i == cluster_parts else None
+
+                if CHANNEL_ID:
+                    try:
+                        await context.bot.send_message(
+                            chat_id=CHANNEL_ID,
+                            text=formatted_post,
+                            parse_mode=None
+                        )
+                    except Exception as e:
+                        logging.error(f"Failed to post to channel: {e}")
+
+                await context.bot.send_message(
+                    chat_id=group_chat_id,
+                    message_thread_id=CRITIQUE_TOPIC_ID,
+                    text=formatted_post,
+                    reply_markup=reply_markup,
+                    parse_mode=None
+                )
+
+            update_ticket_status(t_id, "RESOLVED_APPROVED")
+            await query.edit_message_text(f"{query.message.text}\n\n✅ **APPROVED & POSTED** to channel and critique topic.", parse_mode="Markdown")
+            try:
+                await context.bot.send_message(chat_id=target_id, text=f"🎉 Your work submission (#{sub_id}) has been approved and published!")
+            except Exception:
+                pass
+
+    elif data.startswith("work_reject_"):
+        parts = data.split("_")
+        if len(parts) >= 4:
+            t_id, target_id = int(parts[2]), int(parts[3])
+            
+            # Save state so the bot knows the admin is about to type a rejection reason in DM
+            USER_TICKET_STATE[user.id] = {
+                "category": "Work Rejection Reason",
+                "target_user_id": target_id,
+                "ticket_id": t_id,
+                "admin_msg_id": query.message.message_id
+            }
+            
+            await query.edit_message_text(f"{query.message.text}\n\n⏳ **Awaiting Reason:** Please reply to this message (or send a message here in DM) with the reason for rejection. It will be sent directly to the user along with their credit refund.", parse_mode="Markdown")
+            return
+    
     # Interactive Queue Manager Callbacks
     if data.startswith("q_view_"):
         cat = data.replace("q_view_", "")
@@ -1372,8 +1618,8 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(parts) >= 4:
             t_id, target_id = int(parts[2]), int(parts[3])
             add_critique(target_id, 2)
-            update_ticket_status(t_id, "RESOLVED_GRANTED")
-            await query.edit_message_text(f"{query.message.text}\n\n✅ **RESOLVED:** Granted 2 credits to user `{target_id}`.", parse_mode="Markdown")
+            update_ticket_status(t_id, "RESTORED")
+            await query.edit_message_text(f"{query.message.text}\n\n✅ **RESTORED & RESOLVED:** Granted 2 credits to user `{target_id}`.", parse_mode="Markdown")
             try:
                 await context.bot.send_message(chat_id=target_id, text=f"🎉 Ticket #{t_id} resolved! 2 critique credits added to your balance.")
             except Exception:
