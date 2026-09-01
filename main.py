@@ -1154,16 +1154,19 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             
             # Send resource submission review card to all admins
+            print(f"DEBUG: Attempting to send submission to ADMIN_IDS: {ADMIN_IDS}")
             for admin_id in ADMIN_IDS:
-                if admin_id != 0:
+                if admin_id and admin_id != 0:
                     try:
                         if msg.document:
-                            await context.bot.send_document(chat_id=admin_id, document=msg.document.file_id, caption=admin_text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+                            await context.bot.send_document(chat_id=admin_id, document=msg.document.file_id, caption=admin_text, reply_markup=InlineKeyboardMarkup(buttons))
                         elif msg.photo:
-                            await context.bot.send_photo(chat_id=admin_id, photo=msg.photo[-1].file_id, caption=admin_text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+                            await context.bot.send_photo(chat_id=admin_id, photo=msg.photo[-1].file_id, caption=admin_text, reply_markup=InlineKeyboardMarkup(buttons))
                         else:
-                            await context.bot.send_message(chat_id=admin_id, text=admin_text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+                            await context.bot.send_message(chat_id=admin_id, text=admin_text, reply_markup=InlineKeyboardMarkup(buttons))
+                        print(f"DEBUG: Successfully sent submission to admin ID {admin_id}")
                     except Exception as e:
+                        print(f"ERROR: Failed to send submission to admin ID {admin_id}: {e}")
                         logging.error(f"Failed to send resource submission to admin {admin_id}: {e}")
                         
             await msg.reply_text("✅ Your resource has been submitted to the moderators for review. You'll be notified when it's posted!")
