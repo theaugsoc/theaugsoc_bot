@@ -144,11 +144,11 @@ def bulk_insert_prompts(prompt_list: list) -> tuple:
     skipped = 0
     for item in prompt_list:
         cat = item[0].strip().lower()
-        if len(item) == 3:
+        if len(item) >= 3:
             ctype = item[1].strip().lower()
             if ctype == 'daily':
                 ctype = 'quick prompt'
-            text = item[2].strip()
+            text = '|'.join(item[2:]).strip()
         else:
             ctype = 'weekly'
             text = item[1].strip()
@@ -461,11 +461,6 @@ async def is_admin(chat_id, user_id, context):
     if user_id in ADMIN_IDS and user_id != 0:
         return True
         
-    # If we are in a private chat and not in ADMIN_IDS, return False
-    if chat_id > 0 or str(chat_id).startswith('-100') is False: # handles private chat IDs which are positive user IDs
-        # Wait, check chat type if possible, or check if chat_id equals user_id
-        pass
-        
     try:
         chat_member = await context.bot.get_chat_member(chat_id, user_id)
         return chat_member.status in ['creator', 'administrator']
@@ -489,15 +484,9 @@ async def cmd_mycredits(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_addcredits(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS:
-        msg = update.effective_message
-        resp = await msg.reply_text("You are not authorized to use this command.")
-        asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 10))
-        return
-
     msg = update.effective_message
     user = update.effective_user
-    
+
     if not await is_admin(msg.chat_id, user.id, context):
         resp = await msg.reply_text("❌ Admin command only.")
         asyncio.create_task(auto_delete_messages(context.bot, msg.chat_id, [msg.message_id, resp.message_id], 10))
@@ -893,7 +882,7 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
     # Direct Public Admin Post Handler (#mod + #public)
-    if await is_admin(msg.chat_id, user.id, context) and "#mod" in text.lower() and "#public" in text.lower():
+    if text and await is_admin(msg.chat_id, user.id, context) and "#mod" in text.lower() and "#public" in text.lower():
         # Prevent double processing
         if msg.message_id in PROCESSED_MSG_IDS:
             return
@@ -935,6 +924,12 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ==========================================
     # WORKFLOW SUBMISSION (Pen Name & Content)
     # ==========================================
+    if context.user_data.get('waiting_for_pen_name'):
+        # Step 1: Capture the Pen Name provided by the user
+        if not msg.text:
+            return
+        pen_name = msg.text.strip()
+            
     if context.user_data.get('waiting_for_content'):
         # Step 2: Immediately capture and delete the user's input message to keep chat tidy
         user_msg_id = msg.message_id
@@ -1096,7 +1091,9 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # CHECK FOR NESTED CRITIQUE REPLIES
     if parent_msg and "Critique Submission #" in (parent_msg.text or ""):
         sub_id = parent_msg.text.split("#")[1].split()[0]
-        critique_text = msg.text.strip()
+        critique_text = (msg.text or msg.caption or "").strip()
+        if not critique_text:
+            return
 
         target_reply_id = parent_msg.reply_to_message.message_id if parent_msg.reply_to_message else parent_msg.message_id
 
@@ -1119,7 +1116,7 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Admin .txt File Upload Handler in DM
     if update.effective_chat.type == 'private' and msg.document and await is_admin(msg.chat_id, user.id, context):
         doc = msg.document
-        if doc.file_name.endswith('.txt'):
+        if (doc.file_name or "").endswith('.txt'):
             file = await context.bot.get_file(doc.file_id)
             byte_content = await file.download_as_bytearray()
             lines = byte_content.decode('utf-8').splitlines()
