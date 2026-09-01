@@ -833,11 +833,16 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logging.error(f"Failed to police admin-only topic: {e}")
             return
 
-    # Check if the user is currently in an active submission step
+    # Check if the user is currently in an active submission step or ticket state
+    user_id = update.effective_user.id if update.effective_user else None
     is_in_workflow = any([
         context.user_data.get('waiting_for_pen_name'),
         context.user_data.get('waiting_for_title'),
-        context.user_data.get('waiting_for_work')
+        context.user_data.get('waiting_for_work'),
+        context.user_data.get('waiting_for_content'),
+        context.user_data.get('waiting_for_text'),
+        context.user_data.get('waiting_for_submission'),
+        (user_id in USER_TICKET_STATE) if user_id else False
     ])
 
     # Only enforce topic formatting rules if the user is NOT in an active workflow
