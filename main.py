@@ -1,6 +1,6 @@
 import os
 
-ADMIN_IDS = [int(os.getenv("ADMIN_TELEGRAM_ID", "0"))]
+ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_TELEGRAM_ID", "0").split(",") if x.strip().isdigit()]
 
 import sqlite3
 import psycopg2
@@ -852,7 +852,7 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg.text and not msg.document and not msg.photo:
         return
 
-    text = msg.text
+    text = msg.text or msg.caption or ""
     user = update.effective_user
 
     # Direct Public Admin Post Handler (#mod + #public)
