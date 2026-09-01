@@ -2,6 +2,43 @@ import os
 
 ADMIN_IDS = [int(x.strip()) for x in os.getenv("ADMIN_TELEGRAM_ID", "0").split(",") if x.strip().isdigit()]
 
+def set_pen_name(user_id: int, pen_name: str):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO users (user_id, pen_name) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET pen_name=?",
+        (user_id, pen_name, pen_name)
+    )
+    conn.commit()
+    conn.close()
+
+def get_pen_name(user_id: int) -> str:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT pen_name FROM users WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None
+
+async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    for member in update.message.new_chat_members:
+        if member.is_bot:
+            continue
+        await update.message.reply_text(
+            f"Welcome {member.mention_markdown()}! 👋\n\n"
+            f"Please set your **Pen Name** by replying to this message with: `/setname YourPenName`",
+            parse_mode="Markdown"
+        )
+
+async def set_name_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not context.args:
+        await update.message.reply_text("⚠️ Please provide a pen name. Example: `/setname WritingBard`", parse_mode="Markdown")
+        return
+    pen_name = " ".join(context.args)
+    set_pen_name(user.id, pen_name)
+    await update.message.reply_text(f"✅ Your pen name has been set to: **{pen_name}**", parse_mode="Markdown")
+
 import sqlite3
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -898,29 +935,6 @@ async def process_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ==========================================
     # WORKFLOW SUBMISSION (Pen Name & Content)
     # ==========================================
-    if context.user_data.get('waiting_for_pen_name'):
-        # Step 1: Capture the Pen Name provided by the user
-        pen_name = msg.text.strip()
-        context.user_data['pen_name'] = pen_name
-        context.user_data['waiting_for_pen_name'] = False
-        context.user_data['waiting_for_content'] = True # Set next step flag
-        
-        # Clean up user's pen name message to keep chat tidy
-        try:
-            await msg.delete()
-        except Exception:
-            pass
-
-        # Ask for the actual writing content (Title + Body)
-        prompt_msg = await context.bot.send_message(
-            chat_id=msg.chat_id,
-            message_thread_id=msg.message_thread_id if hasattr(msg, 'message_thread_id') else None,
-            text=f"✅ Pen Name recorded as **{pen_name}**.\n\nNow, please reply with your **Title on the first line**, followed by your content:",
-            parse_mode="Markdown"
-        )
-        context.user_data['prompt_msg_id'] = prompt_msg.message_id
-        return
-
     if context.user_data.get('waiting_for_content'):
         # Step 2: Immediately capture and delete the user's input message to keep chat tidy
         user_msg_id = msg.message_id
@@ -1409,6 +1423,32 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Clean up this intermediate step quickly if abandoned halfway (e.g., 15 seconds)
         context.application.create_task(
             auto_delete_prompt(context, sent_message.chat_id, sent_message.message_id, delay=15)
+        )
+        return
+
+    if data.startswith("subtag_type_"):
+        selected_type = data.replace("subtag_type_", "")
+        context.user_data['submission_type'] = selected_type
+        
+        genre = context.user_data.get('submission_genre', 'general')
+        pen_name = get_pen_name(user.id)
+        
+        if not pen_name:
+            await query.edit_message_text(
+                "⚠️ You have not set a Pen Name yet!\n"
+                "Please use `/setname YourPenName` first before submitting work.",
+                parse_mode="Markdown"
+            )
+            return
+
+        context.user_data['pen_name'] = pen_name
+        context.user_data['waiting_for_content'] = True
+        
+        await query.edit_message_text(
+            f"✅ **Tags Selected:** `#{genre} | #{selected_type}`\n"
+            f"✍️ **Pen Name:** `{pen_name}`\n\n"
+            f"Please reply to this message now with your **Title on the first line**, followed by your post text or attachment!",
+            parse_mode="Markdown"
         )
         return
 
@@ -2020,6 +2060,8 @@ def main():
     app.add_handler(CommandHandler("submitresource", cmd_submitresource))
     app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
     app.add_handler(CommandHandler("shop", cmd_shop))
+    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
+    app.add_handler(CommandHandler("setname", set_name_command))
 
     # Register Job Queue
     group_chat_id = int(os.getenv("GROUP_CHAT_ID", "-1001234567890"))
